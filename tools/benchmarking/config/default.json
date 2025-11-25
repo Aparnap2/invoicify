@@ -1,0 +1,23 @@
+{
+  "environment": "development",
+  "api_base_url": "http://localhost:8000",
+  "database_url": "",
+  "load_test_duration_seconds": 300,
+  "load_test_virtual_users": 10,
+  "load_test_ramp_up_seconds": 30,
+  "profiling_duration_seconds": 120,
+  "profiling_sampling_rate": 100.0,
+  "memory_profiling_enabled": true,
+  "cpu_profiling_enabled": true,
+  "monitoring_interval_seconds": 5,
+  "monitoring_duration_seconds": 300,
+  "industry_benchmarks_enabled": true,
+  "comparison_industry": "fintech_ap_automation",
+  "report_format": "html",
+  "include_charts": true,
+  "save_raw_data": true,
+  "response_time_threshold_ms": 500.0,
+  "error_rate_threshold": 0.01,
+  "cpu_usage_threshold": 0.8,
+  "memory_usage_threshold": 0.85
+}

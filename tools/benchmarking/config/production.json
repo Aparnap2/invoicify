@@ -1,0 +1,23 @@
+{
+  "environment": "production",
+  "api_base_url": "https://api.company.com",
+  "database_url": "",
+  "load_test_duration_seconds": 600,
+  "load_test_virtual_users": 100,
+  "load_test_ramp_up_seconds": 60,
+  "profiling_duration_seconds": 300,
+  "profiling_sampling_rate": 50.0,
+  "memory_profiling_enabled": true,
+  "cpu_profiling_enabled": true,
+  "monitoring_interval_seconds": 30,
+  "monitoring_duration_seconds": 3600,
+  "industry_benchmarks_enabled": true,
+  "comparison_industry": "fintech_ap_automation",
+  "report_format": "pdf",
+  "include_charts": true,
+  "save_raw_data": true,
+  "response_time_threshold_ms": 200.0,
+  "error_rate_threshold": 0.005,
+  "cpu_usage_threshold": 0.75,
+  "memory_usage_threshold": 0.8
+}
