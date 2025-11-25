@@ -25,6 +25,10 @@ langgraph==0.0.26
 langchain==0.1.0
 langchain-core==0.1.7
 
+# LLM structured outputs
+instructor==1.3.7
+openai==1.12.0
+
 # Cloud storage & utilities
 boto3==1.34.0
 minio==7.2.0

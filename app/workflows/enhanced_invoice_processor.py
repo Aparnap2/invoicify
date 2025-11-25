@@ -22,6 +22,7 @@ from app.services.storage_service import StorageService
 from app.services.exception_service import ExceptionService
 from app.services.export_service import ExportService
 from app.services.metrics_service import metrics_service
+from app.services.vendor_communication_service import VendorCommunicationService
 from app.db.session import AsyncSessionLocal
 from app.models.invoice import Invoice, InvoiceStatus
 # Import models when needed to avoid circular imports
@@ -110,6 +111,7 @@ class EnhancedInvoiceProcessor:
         self.storage_service = StorageService()
         self.exception_service = ExceptionService()
         self.export_service = ExportService()
+        self.vendor_communication_service = VendorCommunicationService()
 
         # Initialize state persistence
         self.checkpointer = MemorySaver()
@@ -580,6 +582,7 @@ class EnhancedInvoiceProcessor:
 
             # Create exceptions for validation failures
             exception_ids = []
+            communication_results = []
             if not validation_passed and error_count > 0:
                 try:
                     exceptions = await self.exception_service.create_exception_from_validation(
@@ -590,6 +593,49 @@ class EnhancedInvoiceProcessor:
                     logger.info(f"Created {len(exception_ids)} exceptions for invoice {state['invoice_id']}")
                 except Exception as exc_error:
                     logger.error(f"Failed to create exceptions for invoice {state['invoice_id']}: {exc_error}")
+
+                # Send vendor communication for validation failures
+                try:
+                    # Prepare validation result for vendor communication
+                    validation_result_dict = validation_result.model_dump()
+
+                    # Prepare invoice data from extraction result
+                    extraction_result = state.get("extraction_result", {})
+                    invoice_data = {
+                        "invoice_id": state["invoice_id"],
+                        "vendor_name": extraction_result.get("header", {}).get("vendor_name"),
+                        "vendor_email": extraction_result.get("header", {}).get("vendor_email"),
+                        "invoice_number": extraction_result.get("header", {}).get("invoice_number"),
+                        "invoice_date": extraction_result.get("header", {}).get("invoice_date"),
+                        "total_amount": extraction_result.get("header", {}).get("total_amount"),
+                        "due_date": extraction_result.get("header", {}).get("due_date"),
+                        "po_number": extraction_result.get("header", {}).get("po_number")
+                    }
+
+                    # Send vendor communication
+                    communication_response = await self.vendor_communication_service.handle_validation_failure(
+                        validation_result=validation_result_dict,
+                        invoice_data=invoice_data
+                    )
+
+                    communication_results.append({
+                        "success": communication_response.success,
+                        "communication_id": communication_response.communication_id,
+                        "message": communication_response.error_message if not communication_response.success else "Communication sent successfully"
+                    })
+
+                    if communication_response.success:
+                        logger.info(f"Vendor communication sent for invoice {state['invoice_id']}: {communication_response.communication_id}")
+                    else:
+                        logger.warning(f"Failed to send vendor communication for invoice {state['invoice_id']}: {communication_response.error_message}")
+
+                except Exception as comm_error:
+                    logger.error(f"Failed to send vendor communication for invoice {state['invoice_id']}: {comm_error}")
+                    communication_results.append({
+                        "success": False,
+                        "communication_id": None,
+                        "message": f"Communication failed: {str(comm_error)}"
+                    })
 
             # Update state with validation results
             state.update({
@@ -602,11 +648,14 @@ class EnhancedInvoiceProcessor:
                 "requires_human_review": not validation_passed or error_count > 0,
                 "exceptions": validation_issues,
                 "exception_ids": state.get("exception_ids", []) + exception_ids,
+                "vendor_communications": communication_results,
                 "error_message": None if validation_passed else f"Validation failed with {error_count} errors",
                 "error_details": None if validation_passed else {
                     "validation_errors": error_count,
                     "validation_warnings": warning_count,
-                    "validation_confidence": confidence_score
+                    "validation_confidence": confidence_score,
+                    "communications_sent": len([c for c in communication_results if c["success"]]),
+                    "communication_failures": len([c for c in communication_results if not c["success"]])
                 },
                 "processing_history": state.get("processing_history", []) + [{
                     "step": "enhanced_validate",
@@ -620,7 +669,10 @@ class EnhancedInvoiceProcessor:
                         "warning_count": warning_count,
                         "validation_confidence": confidence_score,
                         "rules_applied": len(applied_rules),
-                        "exceptions_created": len(exception_ids)
+                        "exceptions_created": len(exception_ids),
+                        "vendor_communications_sent": len([c for c in communication_results if c["success"]]),
+                        "vendor_communications_failed": len([c for c in communication_results if not c["success"]]),
+                        "communication_ids": [c.get("communication_id") for c in communication_results if c.get("communication_id")]
                     }
                 }]
             })

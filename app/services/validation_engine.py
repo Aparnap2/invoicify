@@ -1,6 +1,6 @@
 """
 Advanced validation engine with deterministic structural validation, mathematical validation,
-business rules validation, and machine-readable reason codes.
+business rules validation, security validation, compliance validation, and machine-readable reason codes.
 """
 
 import logging
@@ -26,10 +26,27 @@ from app.api.schemas.validation import (
     DuplicateCheckResult,
     ValidationRulesConfig,
 )
-from app.core.exceptions import ValidationException
+from app.core.exceptions import ValidationException, SecurityException
 from app.db.session import AsyncSessionLocal
 from app.models.invoice import Invoice, InvoiceExtraction
 from app.models.reference import Vendor, PurchaseOrder, GoodsReceiptNote
+from app.schemas.validation_rules import (
+    ValidationLayer,
+    SecurityThreatLevel,
+    ThreatType,
+    SecurityRule,
+    DefenseInDepthResult,
+    ThreatDetectionResult,
+    SanitizationResult,
+    SecurityEvent,
+    DEFAULT_SECURITY_RULES,
+    SQL_INJECTION_PATTERNS,
+    XSS_PATTERNS,
+    PATH_TRAVERSAL_PATTERNS,
+    COMMAND_INJECTION_PATTERNS
+)
+from app.services.security_validator import SecurityValidator, SecurityContext
+from app.services.input_sanitizer import InputSanitizer, SanitizationLevel
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +87,33 @@ class ReasonTaxonomy(Enum):
     DUPLICATE_SUSPECT = "DUPLICATE_SUSPECT"
     POTENTIAL_FRAUD = "POTENTIAL_FRAUD"
 
+    # Security Validation Issues
+    SQL_INJECTION_DETECTED = "SQL_INJECTION_DETECTED"
+    XSS_ATTACK_DETECTED = "XSS_ATTACK_DETECTED"
+    COMMAND_INJECTION_DETECTED = "COMMAND_INJECTION_DETECTED"
+    PATH_TRAVERSAL_DETECTED = "PATH_TRAVERSAL_DETECTED"
+    FILE_UPLOAD_THREAT = "FILE_UPLOAD_THREAT"
+    RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
+    DATA_EXFILTRATION_ATTEMPT = "DATA_EXFILTRATION_ATTEMPT"
+    BUSINESS_LOGIC_ABUSE = "BUSINESS_LOGIC_ABUSE"
+    ALLOWLIST_VIOLATION = "ALLOWLIST_VIOLATION"
+    DENYLIST_VIOLATION = "DENYLIST_VIOLATION"
+    MALICIOUS_INPUT_DETECTED = "MALICIOUS_INPUT_DETECTED"
+
+    # Compliance Validation Issues
+    GDPR_VIOLATION = "GDPR_VIOLATION"
+    PCI_DSS_VIOLATION = "PCI_DSS_VIOLATION"
+    SOX_COMPLIANCE_VIOLATION = "SOX_COMPLIANCE_VIOLATION"
+    DATA_RETENTION_VIOLATION = "DATA_RETENTION_VIOLATION"
+    AUDIT_LOGGING_REQUIRED = "AUDIT_LOGGING_REQUIRED"
+    ENCRYPTION_REQUIRED = "ENCRYPTION_REQUIRED"
+    ACCESS_CONTROL_VIOLATION = "ACCESS_CONTROL_VIOLATION"
+
     # System Issues
     VALIDATION_ERROR = "VALIDATION_ERROR"
     SYSTEM_ERROR = "SYSTEM_ERROR"
+    SANITIZATION_ERROR = "SANITIZATION_ERROR"
+    SECURITY_VALIDATION_ERROR = "SECURITY_VALIDATION_ERROR"
 
 
 @dataclass
@@ -108,13 +149,32 @@ class RuleExecutionResult:
 
 
 class ValidationEngine:
-    """Advanced validation engine with comprehensive rule sets and reason taxonomy."""
+    """Advanced validation engine with comprehensive rule sets and defense-in-depth security."""
 
-    def __init__(self):
-        """Initialize the validation engine."""
-        self.rules_version = "2.0.0"
+    def __init__(self, enable_security_validation: bool = True, enable_sanitization: bool = True):
+        """Initialize the validation engine with security capabilities."""
+        self.rules_version = "3.0.0"
+        self.enable_security_validation = enable_security_validation
+        self.enable_sanitization = enable_sanitization
+
+        # Initialize traditional validation rules
         self.rules = self._initialize_rules()
         self.reason_taxonomy_map = self._initialize_reason_taxonomy()
+
+        # Initialize defense-in-depth services
+        if enable_security_validation:
+            self.security_validator = SecurityValidator(enable_threat_intelligence=True)
+            logger.info("Security validator initialized")
+
+        if enable_sanitization:
+            self.input_sanitizer = InputSanitizer(default_level=SanitizationLevel.NORMAL)
+            logger.info("Input sanitizer initialized")
+
+        # Initialize security and compliance rules
+        self.security_rules = self._initialize_security_rules()
+        self.compliance_rules = self._initialize_compliance_rules()
+
+        logger.info(f"ValidationEngine initialized with security: {enable_security_validation}, sanitization: {enable_sanitization}")
 
     def _initialize_rules(self) -> Dict[str, List[ValidationRule]]:
         """Initialize validation rules by category."""
@@ -255,9 +315,75 @@ class ValidationEngine:
             "invoice_too_old": ReasonTaxonomy.BUSINESS_RULE_VIOLATION,
             "amount_excessive": ReasonTaxonomy.BUSINESS_RULE_VIOLATION,
 
+            # Security reasons
+            "sql_injection_detected": ReasonTaxonomy.SQL_INJECTION_DETECTED,
+            "xss_attack_detected": ReasonTaxonomy.XSS_ATTACK_DETECTED,
+            "command_injection_detected": ReasonTaxonomy.COMMAND_INJECTION_DETECTED,
+            "path_traversal_detected": ReasonTaxonomy.PATH_TRAVERSAL_DETECTED,
+            "file_upload_threat": ReasonTaxonomy.FILE_UPLOAD_THREAT,
+            "rate_limit_exceeded": ReasonTaxonomy.RATE_LIMIT_EXCEEDED,
+            "data_exfiltration_attempt": ReasonTaxonomy.DATA_EXFILTRATION_ATTEMPT,
+            "business_logic_abuse": ReasonTaxonomy.BUSINESS_LOGIC_ABUSE,
+            "allowlist_violation": ReasonTaxonomy.ALLOWLIST_VIOLATION,
+            "denylist_violation": ReasonTaxonomy.DENYLIST_VIOLATION,
+            "malicious_input_detected": ReasonTaxonomy.MALICIOUS_INPUT_DETECTED,
+
+            # Compliance reasons
+            "gdpr_violation": ReasonTaxonomy.GDPR_VIOLATION,
+            "pci_dss_violation": ReasonTaxonomy.PCI_DSS_VIOLATION,
+            "sox_compliance_violation": ReasonTaxonomy.SOX_COMPLIANCE_VIOLATION,
+            "data_retention_violation": ReasonTaxonomy.DATA_RETENTION_VIOLATION,
+            "audit_logging_required": ReasonTaxonomy.AUDIT_LOGGING_REQUIRED,
+            "encryption_required": ReasonTaxonomy.ENCRYPTION_REQUIRED,
+            "access_control_violation": ReasonTaxonomy.ACCESS_CONTROL_VIOLATION,
+
             # System reasons
             "validation_system_error": ReasonTaxonomy.SYSTEM_ERROR,
-            "database_error": ReasonTaxonomy.SYSTEM_ERROR
+            "database_error": ReasonTaxonomy.SYSTEM_ERROR,
+            "sanitization_error": ReasonTaxonomy.SANITIZATION_ERROR,
+            "security_validation_error": ReasonTaxonomy.SECURITY_VALIDATION_ERROR
+        }
+
+    def _initialize_security_rules(self) -> Dict[str, List[SecurityRule]]:
+        """Initialize security validation rules."""
+        return {
+            "injection_attacks": DEFAULT_SECURITY_RULES[:2],  # SQL and Command injection
+            "xss_attacks": [DEFAULT_SECURITY_RULES[1]],  # XSS protection
+            "file_security": [DEFAULT_SECURITY_RULES[2]],  # Path traversal
+            "input_validation": DEFAULT_SECURITY_RULES,  # All security rules
+        }
+
+    def _initialize_compliance_rules(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Initialize compliance validation rules."""
+        return {
+            "gdpr": [
+                {
+                    "name": "personal_data_detection",
+                    "description": "Detect and flag personal data for GDPR compliance",
+                    "patterns": [r"\b\d{4}-\d{2}-\d{2}\b",  # Dates (potential DoB)
+                                r"\b\d{3}-\d{2}-\d{4}\b",  # SSN pattern
+                                r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"],  # Email
+                    "action": "flag_for_review"
+                }
+            ],
+            "pci_dss": [
+                {
+                    "name": "credit_card_detection",
+                    "description": "Detect and mask credit card numbers for PCI DSS compliance",
+                    "patterns": [r"\b4\d{3}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b",  # Visa
+                                r"\b5[1-5]\d{2}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b",  # MasterCard
+                                r"\b3[47]\d{2}[-\s]?\d{6}[-\s]?\d{5}\b"],  # American Express
+                    "action": "mask_and_flag"
+                }
+            ],
+            "audit": [
+                {
+                    "name": "audit_logging_required",
+                    "description": "Ensure all sensitive operations are logged for audit",
+                    "check_fields": ["total_amount", "vendor_name", "invoice_number"],
+                    "action": "ensure_logging"
+                }
+            ]
         }
 
     async def validate_comprehensive(
@@ -377,10 +503,459 @@ class ValidationEngine:
                 check_results=self._create_error_check_results(),
                 validated_at=start_time,
                 rules_version=self.rules_version,
-                validator_version="2.0.0",
+                validator_version="3.0.0",
                 header_summary={},
                 lines_summary={}
             )
+
+    async def validate_defense_in_depth(
+        self,
+        extraction_result: Dict[str, Any],
+        invoice_id: Optional[str] = None,
+        vendor_id: Optional[str] = None,
+        context: Optional[SecurityContext] = None,
+        strict_mode: bool = False,
+        custom_rules: Optional[Dict[str, List[ValidationRule]]] = None
+    ) -> DefenseInDepthResult:
+        """
+        Perform comprehensive defense-in-depth validation with all security layers.
+
+        Args:
+            extraction_result: Invoice extraction data
+            invoice_id: Optional invoice ID
+            vendor_id: Optional vendor ID
+            context: Security context for threat analysis
+            strict_mode: Enable strict validation mode
+            custom_rules: Optional custom validation rules
+
+        Returns:
+            DefenseInDepthResult with comprehensive analysis
+        """
+        start_time = datetime.utcnow()
+        logger.info(f"Starting defense-in-depth validation for invoice {invoice_id}")
+
+        # Initialize result
+        result = DefenseInDepthResult(
+            passed=True,
+            overall_threat_level=SecurityThreatLevel.LOW,
+            confidence_score=1.0,
+            processing_time_ms=0.0,
+            layers_executed=[],
+            rules_applied=[]
+        )
+
+        try:
+            # Extract data
+            header = extraction_result.get("header", {})
+            lines = extraction_result.get("lines", [])
+            confidence = extraction_result.get("confidence", {})
+
+            # Layer 1: Input Sanitization
+            if self.enable_sanitization:
+                logger.info("Executing Layer 1: Input Sanitization")
+                result.layers_executed.append(ValidationLayer.SYNTACTIC)
+
+                sanitization_results = await self._sanitize_extraction_data(
+                    header, lines, context
+                )
+                result.sanitization_results = sanitization_results
+
+                # Check for critical sanitization failures
+                critical_sanitization_issues = [
+                    sr for sr in sanitization_results
+                    if not sr.success and sr.warnings
+                ]
+
+                if critical_sanitization_issues:
+                    result.passed = False
+                    result.overall_threat_level = SecurityThreatLevel.HIGH
+                    result.confidence_score *= 0.7
+                    result.blocked_operations.append("critical_sanitization_failure")
+
+            # Layer 2: Syntactic Validation (traditional validation)
+            logger.info("Executing Layer 2: Syntactic Validation")
+            result.layers_executed.append(ValidationLayer.SYNTACTIC)
+
+            traditional_result = await self.validate_comprehensive(
+                extraction_result, invoice_id, vendor_id, strict_mode, custom_rules
+            )
+
+            if not traditional_result.passed:
+                result.passed = False
+                result.confidence_score *= 0.8
+                result.syntactic_validation = {
+                    "passed": traditional_result.passed,
+                    "error_count": traditional_result.error_count,
+                    "warning_count": traditional_result.warning_count,
+                    "issues": [issue.message for issue in traditional_result.issues]
+                }
+
+            # Layer 3: Security Validation
+            if self.enable_security_validation:
+                logger.info("Executing Layer 3: Security Validation")
+                result.layers_executed.append(ValidationLayer.SECURITY)
+
+                security_results = await self._validate_security_layers(
+                    header, lines, context, invoice_id
+                )
+                result.threat_detections = security_results["threat_detections"]
+                result.security_events = security_results["security_events"]
+
+                # Update threat level based on security results
+                if security_results["threat_detections"]:
+                    max_threat_level = max(
+                        td.threat_level for td in security_results["threat_detections"]
+                    )
+                    result.overall_threat_level = max(result.overall_threat_level, max_threat_level)
+
+                    # Critical threats cause immediate failure
+                    critical_threats = [
+                        td for td in security_results["threat_detections"]
+                        if td.threat_level in [SecurityThreatLevel.CRITICAL, SecurityThreatLevel.HIGH]
+                    ]
+
+                    if critical_threats:
+                        result.passed = False
+                        result.confidence_score *= 0.5
+                        result.blocked_operations.append("security_threat_detected")
+
+                result.security_validation = {
+                    "threats_detected": len(security_results["threat_detections"]),
+                    "security_events": len(security_results["security_events"]),
+                    "max_threat_level": result.overall_threat_level.value
+                }
+
+            # Layer 4: Compliance Validation
+            logger.info("Executing Layer 4: Compliance Validation")
+            result.layers_executed.append(ValidationLayer.COMPLIANCE)
+
+            compliance_results = await self._validate_compliance_layers(
+                header, lines, context
+            )
+
+            if compliance_results["violations"]:
+                result.passed = False
+                result.overall_threat_level = max(result.overall_threat_level, SecurityThreatLevel.MEDIUM)
+                result.confidence_score *= 0.9
+                result.compliance_validation = {
+                    "violations": len(compliance_results["violations"]),
+                    "compliance_score": compliance_results["score"],
+                    "issues": compliance_results["violations"]
+                }
+
+            # Calculate final processing time
+            result.processing_time_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+
+            # Generate security recommendations
+            result.security_recommendations = self._generate_security_recommendations(result)
+
+            # Log completion
+            logger.info(
+                f"Defense-in-depth validation completed for invoice {invoice_id}: "
+                f"{'PASSED' if result.passed else 'FAILED'} "
+                f"(threat_level: {result.overall_threat_level.value}, "
+                f"confidence: {result.confidence_score:.2f}, "
+                f"processing_time: {result.processing_time_ms:.2f}ms)"
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Defense-in-depth validation failed: {e}")
+            result.passed = False
+            result.overall_threat_level = SecurityThreatLevel.CRITICAL
+            result.confidence_score = 0.0
+            result.security_recommendations = [f"Validation error: {str(e)}"]
+
+            return result
+
+    # Helper methods for defense-in-depth validation
+
+    async def _sanitize_extraction_data(
+        self,
+        header: Dict[str, Any],
+        lines: List[Dict[str, Any]],
+        context: Optional[SecurityContext] = None
+    ) -> List[SanitizationResult]:
+        """Sanitize all extracted data using input sanitizer."""
+        sanitization_results = []
+
+        if not self.input_sanitizer:
+            return sanitization_results
+
+        # Sanitize header fields
+        for field_name, field_value in header.items():
+            try:
+                result = self.input_sanitizer.sanitize(
+                    field_value,
+                    field_name=field_name
+                )
+                sanitization_results.append(result)
+
+                # Update header with sanitized value
+                header[field_name] = result.sanitized_value
+
+            except Exception as e:
+                logger.error(f"Error sanitizing field {field_name}: {e}")
+                sanitization_results.append(SanitizationResult(
+                    success=False,
+                    sanitized_value="",
+                    original_value=str(field_value),
+                    sanitization_level=SanitizationLevel.NORMAL,
+                    warnings=[f"Sanitization error: {str(e)}"]
+                ))
+
+        # Sanitize line item fields
+        for i, line in enumerate(lines):
+            for field_name, field_value in line.items():
+                try:
+                    result = self.input_sanitizer.sanitize(
+                        field_value,
+                        field_name=f"line_{i}_{field_name}"
+                    )
+                    sanitization_results.append(result)
+
+                    # Update line with sanitized value
+                    line[field_name] = result.sanitized_value
+
+                except Exception as e:
+                    logger.error(f"Error sanitizing line {i} field {field_name}: {e}")
+                    sanitization_results.append(SanitizationResult(
+                        success=False,
+                        sanitized_value="",
+                        original_value=str(field_value),
+                        sanitization_level=SanitizationLevel.NORMAL,
+                        warnings=[f"Sanitization error: {str(e)}"]
+                    ))
+
+        return sanitization_results
+
+    async def _validate_security_layers(
+        self,
+        header: Dict[str, Any],
+        lines: List[Dict[str, Any]],
+        context: Optional[SecurityContext] = None,
+        invoice_id: Optional[str] = None
+    ) -> Dict[str, List[Any]]:
+        """Validate all security layers for threats."""
+        threat_detections = []
+        security_events = []
+
+        if not self.security_validator:
+            return {"threat_detections": threat_detections, "security_events": security_events}
+
+        # Validate header fields
+        for field_name, field_value in header.items():
+            try:
+                result = self.security_validator.validate_field(
+                    field_name, field_value, context
+                )
+
+                if result.is_threat:
+                    # Convert to threat detection result
+                    threat_result = ThreatDetectionResult(
+                        is_threat=True,
+                        threat_type=result.threat_type,
+                        threat_level=result.threat_level,
+                        confidence=result.confidence,
+                        matched_patterns=result.matched_patterns,
+                        field=field_name,
+                        original_value=result.original_value,
+                        risk_score=result.risk_score,
+                        recommendation=result.recommendation,
+                        details=result.details
+                    )
+                    threat_detections.append(threat_result)
+
+                    # Create security event
+                    security_event = SecurityEvent(
+                        event_type="threat_detected",
+                        threat_type=result.threat_type,
+                        threat_level=result.threat_level,
+                        field=field_name,
+                        original_value=result.original_value,
+                        confidence=result.confidence,
+                        details=result.details
+                    )
+
+                    if context:
+                        security_event.source_ip = context.source_ip
+                        security_event.user_id = context.user_id
+                        security_event.session_id = context.session_id
+                        security_event.user_agent = context.user_agent
+                        security_event.request_id = context.request_id
+
+                    security_events.append(security_event)
+
+            except Exception as e:
+                logger.error(f"Error validating field {field_name}: {e}")
+
+        # Validate line item fields
+        for i, line in enumerate(lines):
+            for field_name, field_value in line.items():
+                try:
+                    result = self.security_validator.validate_field(
+                        f"line_{i}_{field_name}", field_value, context
+                    )
+
+                    if result.is_threat:
+                        threat_result = ThreatDetectionResult(
+                            is_threat=True,
+                            threat_type=result.threat_type,
+                            threat_level=result.threat_level,
+                            confidence=result.confidence,
+                            matched_patterns=result.matched_patterns,
+                            field=f"line_{i}_{field_name}",
+                            original_value=result.original_value,
+                            risk_score=result.risk_score,
+                            recommendation=result.recommendation,
+                            details=result.details
+                        )
+                        threat_detections.append(threat_result)
+
+                except Exception as e:
+                    logger.error(f"Error validating line {i} field {field_name}: {e}")
+
+        return {"threat_detections": threat_detections, "security_events": security_events}
+
+    async def _validate_compliance_layers(
+        self,
+        header: Dict[str, Any],
+        lines: List[Dict[str, Any]],
+        context: Optional[SecurityContext] = None
+    ) -> Dict[str, Any]:
+        """Validate compliance requirements."""
+        violations = []
+        total_checks = 0
+
+        # GDPR compliance checks
+        gdpr_rules = self.compliance_rules.get("gdpr", [])
+        for rule in gdpr_rules:
+            total_checks += 1
+            violation_found = False
+
+            # Check header fields
+            for field_name, field_value in header.items():
+                if isinstance(field_value, str):
+                    for pattern in rule.get("patterns", []):
+                        if re.search(pattern, field_value):
+                            violations.append({
+                                "compliance_type": "GDPR",
+                                "rule": rule["name"],
+                                "field": field_name,
+                                "pattern_matched": pattern,
+                                "action_required": rule["action"]
+                            })
+                            violation_found = True
+                            break
+
+            # Check line item fields
+            for line in lines:
+                for field_name, field_value in line.items():
+                    if isinstance(field_value, str):
+                        for pattern in rule.get("patterns", []):
+                            if re.search(pattern, field_value):
+                                violations.append({
+                                    "compliance_type": "GDPR",
+                                    "rule": rule["name"],
+                                    "field": f"line_item_{field_name}",
+                                    "pattern_matched": pattern,
+                                    "action_required": rule["action"]
+                                })
+                                violation_found = True
+                                break
+
+        # PCI DSS compliance checks
+        pci_rules = self.compliance_rules.get("pci_dss", [])
+        for rule in pci_rules:
+            total_checks += 1
+
+            # Check header fields for credit card numbers
+            for field_name, field_value in header.items():
+                if isinstance(field_value, str):
+                    for pattern in rule.get("patterns", []):
+                        if re.search(pattern, field_value):
+                            violations.append({
+                                "compliance_type": "PCI_DSS",
+                                "rule": rule["name"],
+                                "field": field_name,
+                                "pattern_matched": pattern,
+                                "action_required": rule["action"]
+                            })
+
+        # Audit compliance checks
+        audit_rules = self.compliance_rules.get("audit", [])
+        for rule in audit_rules:
+            total_checks += 1
+            required_fields = rule.get("check_fields", [])
+
+            for field in required_fields:
+                if field not in header or not header[field]:
+                    violations.append({
+                        "compliance_type": "AUDIT",
+                        "rule": rule["name"],
+                        "field": field,
+                        "issue": "Missing required field for audit logging",
+                        "action_required": rule["action"]
+                    })
+
+        # Calculate compliance score
+        violations_count = len(violations)
+        compliance_score = max(0, 100 - (violations_count / max(total_checks, 1) * 100))
+
+        return {
+            "violations": violations,
+            "score": compliance_score,
+            "total_checks": total_checks,
+            "violations_count": violations_count
+        }
+
+    def _generate_security_recommendations(
+        self, result: DefenseInDepthResult
+    ) -> List[str]:
+        """Generate security recommendations based on validation results."""
+        recommendations = []
+
+        # Threat-based recommendations
+        for threat in result.threat_detections:
+            if threat.recommendation:
+                recommendations.append(threat.recommendation)
+
+        # Threat level-based recommendations
+        if result.overall_threat_level == SecurityThreatLevel.CRITICAL:
+            recommendations.extend([
+                "CRITICAL: Block request immediately and investigate source",
+                "Scan system for potential compromise",
+                "Review all recent requests from this source"
+            ])
+        elif result.overall_threat_level == SecurityThreatLevel.HIGH:
+            recommendations.extend([
+                "HIGH: Review request manually before processing",
+                "Consider temporarily blocking source IP",
+                "Enable enhanced monitoring for this source"
+            ])
+        elif result.overall_threat_level == SecurityThreatLevel.MEDIUM:
+            recommendations.extend([
+                "MEDIUM: Additional validation recommended",
+                "Log request for security review",
+                "Consider rate limiting for this source"
+            ])
+
+        # Sanitization-based recommendations
+        for sanitization in result.sanitization_results:
+            if not sanitization.success:
+                recommendations.append(
+                    f"Input sanitization failed for field: {getattr(sanitization, 'field', 'unknown')}"
+                )
+
+        # Compliance-based recommendations
+        if result.compliance_validation and result.compliance_validation.get("violations", 0) > 0:
+            recommendations.append("Compliance violations detected - review and remediate")
+
+        # Remove duplicates
+        recommendations = list(set(recommendations))
+
+        return recommendations[:10]  # Limit to top 10 recommendations
 
     async def _execute_rule_category(
         self,

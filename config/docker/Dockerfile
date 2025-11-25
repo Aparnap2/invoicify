@@ -1,11 +1,15 @@
 FROM python:3.11-slim
 
-# Set environment variables
+# Set environment variables for caching
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_CACHE_DIR=/root/.cache/pip \
+    UV_CACHE_DIR=/root/.cache/uv
+
+# Create cache directories
+RUN mkdir -p /root/.cache/pip /root/.cache/uv
 
 # Install system dependencies
 RUN apt-get update \
@@ -18,17 +22,23 @@ RUN apt-get update \
         poppler-utils \
         tesseract-ocr \
         tesseract-ocr-eng \
+        python3-click \
     && rm -rf /var/lib/apt/lists/*
 
 # Set work directory
 WORKDIR /app
 
 # Install uv for fast Python package management
-RUN pip install uv
+RUN pip install --cache-dir /root/.cache/pip uv
 
-# Install Python dependencies using uv
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen
+# Copy dependency files first for better caching
+COPY pyproject.toml ./
+
+# Install Python dependencies using uv with cache
+RUN uv sync --cache-dir /root/.cache/uv
+
+# Install additional dependencies that might be missing
+RUN uv add --cache-dir /root/.cache/uv click fastapi uvicorn[standard] pydantic-settings python-multipart
 
 # Copy application code
 COPY app/ ./app/

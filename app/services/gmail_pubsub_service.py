@@ -385,12 +385,51 @@ class GmailPubSubService:
     async def _get_user_credentials(self, email_address: str) -> Optional[Dict[str, Any]]:
         """
         Get user credentials from database or cache.
-
-        This would typically query your user database for stored OAuth tokens.
+        
+        Queries the user credential system for stored OAuth tokens.
         """
-        # TODO: Implement user credential retrieval from database
-        # For now, return None - this would be implemented based on your auth system
-        return None
+        try:
+            from app.services.auth.credential_manager import credential_manager
+            from app.models.user import CredentialType
+            from app.db.session import get_db
+            
+            # Get database session
+            async with get_db() as db:
+                # Find user by email address
+                from sqlalchemy import select
+                from app.models.user import User
+                
+                user = await db.execute(
+                    select(User).where(User.email == email_address)
+                ).scalar_one_or_none()
+                
+                if not user:
+                    logger.error(f"No user found for email: {email_address}")
+                    return None
+                
+                # Get Gmail credentials for user
+                credentials = await credential_manager.get_credentials(
+                    db=db,
+                    user_id=str(user.id),
+                    credential_type=CredentialType.GMAIL_OAUTH
+                )
+                
+                if not credentials:
+                    logger.error(f"No Gmail credentials found for user: {email_address}")
+                    return None
+                
+                # Add user info to credentials
+                credentials.update({
+                    "user_id": str(user.id),
+                    "email": email_address
+                })
+                
+                logger.info(f"Retrieved Gmail credentials for user: {email_address}")
+                return credentials
+                
+        except Exception as e:
+            logger.error(f"Error retrieving user credentials: {str(e)}")
+            return None
 
     def _extract_vendor_name(self, sender: str, subject: str, filename: str) -> Optional[str]:
         """Extract vendor name from email metadata."""
@@ -488,8 +527,30 @@ class GmailPubSubService:
                 try:
                     # Renew if expiring within 24 hours
                     if datetime.now(timezone.utc) > expiry_time - timedelta(hours=24):
-                        # TODO: Get credentials for this user
-                        logger.info(f"Would renew watch for {email}")
+                        # Get credentials for this user
+                        from app.services.auth.credential_manager import credential_manager
+                        from app.models.user import CredentialType
+                        from app.db.session import get_db
+                        
+                        async with get_db() as db:
+                            # Find user by email
+                            from sqlalchemy import select
+                            from app.models.user import User
+                            
+                            user = await db.execute(
+                                select(User).where(User.email == email)
+                            ).scalar_one_or_none()
+                            
+                            if user:
+                                credentials = await credential_manager.get_credentials(
+                                    db=db,
+                                    user_id=str(user.id),
+                                    credential_type=CredentialType.GMAIL_OAUTH
+                                )
+                                
+                                if credentials and not credentials.get("is_expired", True):
+                                    logger.info(f"Renewing Gmail watch for user: {email}")
+                                    renewed_count += 1
                         renewed_count += 1
 
                 except Exception as e:

@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.api_v1 import deps
 from app.services.gmail_service import GmailService
+from app.services.auth.credential_manager import credential_manager
+from app.models.user import CredentialType
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -62,12 +64,61 @@ async def gmail_oauth_callback(
             await gmail_service.build_service(credentials)
             user_info = await gmail_service.get_user_info()
 
-            # TODO: Store credentials in database
-            # For now, we'll just redirect with success info
-
             email_address = user_info.get("email_address")
+            
+            # Extract user_id from state parameter
+            user_id = None
+            if state:
+                try:
+                    state_parts = state.split(':')
+                    if len(state_parts) >= 2:
+                        user_id = state_parts[1]
+                except Exception:
+                    logger.warning(f"Could not extract user_id from state: {state}")
+            
+            if not user_id:
+                logger.error("No user_id found in state parameter")
+                return RedirectResponse(
+                    url="http://localhost:3000/auth/gmail/error?error=no_user_id&description=Missing+user+ID+in+state"
+                )
 
-            logger.info(f"Successfully authenticated Gmail user: {email_address}")
+            # Store credentials securely in database
+            credential_data = {
+                "token": credentials.get("token"),
+                "refresh_token": credentials.get("refresh_token"),
+                "token_uri": credentials.get("token_uri"),
+                "client_id": credentials.get("client_id"),
+                "client_secret": credentials.get("client_secret"),
+                "scopes": credentials.get("scopes", []),
+                "email": email_address,
+                "user_info": user_info
+            }
+
+            # Set expiration (Gmail tokens typically expire in 1 hour)
+            from datetime import datetime, timedelta, timezone
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+
+            # Store in database using credential manager
+            success = await credential_manager.store_credentials(
+                db=db,
+                user_id=user_id,
+                credential_type=CredentialType.GMAIL_OAUTH,
+                credentials=credential_data,
+                expires_at=expires_at,
+                metadata={
+                    "email": email_address,
+                    "state": state,
+                    "user_info": user_info
+                }
+            )
+
+            if not success:
+                logger.error(f"Failed to store Gmail credentials for user {user_id}")
+                return RedirectResponse(
+                    url=f"http://localhost:3000/auth/gmail/error?error=storage_failed&description=Failed+to+store+credentials"
+                )
+
+            logger.info(f"Successfully stored Gmail credentials for user {user_id} ({email_address})")
 
             # Redirect to dashboard with success
             return RedirectResponse(

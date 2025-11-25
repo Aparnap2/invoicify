@@ -115,6 +115,7 @@ class Settings(BaseSettings):
     QUICKBOOKS_SANDBOX_CLIENT_SECRET: Optional[str] = None
     QUICKBOOKS_REDIRECT_URI: Optional[str] = "http://localhost:8000/api/v1/quickbooks/callback"
     QUICKBOOKS_ENVIRONMENT: str = "sandbox"  # sandbox or production
+    QUICKBOOKS_WEBHOOK_VERIFIER_TOKEN: Optional[str] = None
     XERO_SANDBOX_CLIENT_ID: Optional[str] = None
     XERO_SANDBOX_CLIENT_SECRET: Optional[str] = None
 

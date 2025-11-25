@@ -805,8 +805,10 @@ class QuickBooksService:
         try:
             # Verify webhook signature if provided
             if signature:
-                # TODO: Implement signature verification using webhook verifier token
-                logger.warning("Webhook signature verification not implemented")
+                if not self._verify_webhook_signature(webhook_data, signature):
+                    logger.error("Webhook signature verification failed")
+                    raise QuickBooksServiceException("Invalid webhook signature")
+                logger.info("Webhook signature verified successfully")
 
             # Process webhook events
             event_notifications = webhook_data.get("eventNotifications", [])
@@ -899,4 +901,54 @@ class QuickBooksService:
 
         except Exception as e:
             logger.error(f"Failed to disconnect: {str(e)}")
+            return False
+    
+    def _verify_webhook_signature(self, webhook_data: Dict[str, Any], signature: str) -> bool:
+        """
+        Verify QuickBooks webhook signature using HMAC-SHA256.
+        
+        Args:
+            webhook_data: The webhook payload
+            signature: The HMAC signature from the request header
+            
+        Returns:
+            True if signature is valid, False otherwise
+        """
+        try:
+            import hmac
+            import hashlib
+            import json
+            
+            # Get webhook verifier token from settings
+            verifier_token = settings.QUICKBOOKS_WEBHOOK_VERIFIER_TOKEN
+            if not verifier_token:
+                logger.warning("QuickBooks webhook verifier token not configured")
+                return False
+            
+            # QuickBooks sends signature as: sha256=<hex_signature>
+            if not signature.startswith('sha256='):
+                logger.error("Invalid signature format, expected 'sha256=<hex>'")
+                return False
+            
+            received_signature = signature[7:]  # Remove 'sha256=' prefix
+            
+            # Create the expected signature
+            # QuickBooks uses the raw JSON payload as the message
+            message = json.dumps(webhook_data, separators=(',', ':'), sort_keys=True)
+            expected_signature = hmac.new(
+                verifier_token.encode('utf-8'),
+                message.encode('utf-8'),
+                hashlib.sha256
+            ).hexdigest()
+            
+            # Compare signatures securely
+            is_valid = hmac.compare_digest(received_signature, expected_signature)
+            
+            if not is_valid:
+                logger.error(f"Signature mismatch. Expected: {expected_signature}, Received: {received_signature}")
+            
+            return is_valid
+            
+        except Exception as e:
+            logger.error(f"Error verifying webhook signature: {str(e)}")
             return False

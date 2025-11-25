@@ -6,11 +6,18 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.api_v1.deps import get_async_session, get_current_active_user
+from app.api.api_v1.standards import (
+    APIStandardizer,
+    EndpointValidator,
+    DatabaseHelper,
+    StatusCodes,
+    ErrorMessages,
+    get_db_session,
+    get_authenticated_user
+)
 from app.models.user import User
 from app.models.metrics import SLIType, SLOPeriod
 from app.services.metrics_service import metrics_service
@@ -21,11 +28,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/slos/dashboard", response_model=Dict[str, Any])
+@router.get("/slos/dashboard")
 async def get_slo_dashboard(
     time_range_days: int = Query(30, ge=1, le=365, description="Time range in days"),
     slo_types: Optional[List[SLIType]] = Query(None, description="Filter by SLO types"),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_authenticated_user),
 ):
     """
     Get comprehensive SLO dashboard data.
@@ -37,30 +44,32 @@ async def get_slo_dashboard(
     - Historical trends
     """
     try:
+        # Validate parameters
+        if time_range_days < 1 or time_range_days > 365:
+            return APIStandardizer.error_response(
+                error_message="Time range days must be between 1 and 365",
+                status_code=StatusCodes.BAD_REQUEST
+            )
+
         dashboard_data = await metrics_service.get_slo_dashboard_data(
             time_range_days=time_range_days,
             slo_types=slo_types
         )
 
-        return JSONResponse(
-            status_code=200,
-            content={
-                "success": True,
-                "data": dashboard_data,
-                "message": "SLO dashboard data retrieved successfully"
-            }
+        return APIStandardizer.success_response(
+            data=dashboard_data,
+            message="SLO dashboard data retrieved successfully"
         )
 
     except Exception as e:
-        logger.error(f"Failed to get SLO dashboard: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve SLO dashboard: {str(e)}")
+        return APIStandardizer.handle_exception(e, "SLO dashboard retrieval")
 
 
-@router.get("/slos/definitions", response_model=Dict[str, Any])
+@router.get("/slos/definitions")
 async def get_slo_definitions(
     active_only: bool = Query(True, description="Filter to active SLOs only"),
-    current_user: User = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_authenticated_user),
+    session: AsyncSession = Depends(get_db_session),
 ):
     """Get all SLO definitions."""
     try:
@@ -95,29 +104,27 @@ async def get_slo_definitions(
                 "updated_at": slo.updated_at.isoformat(),
             })
 
-        return JSONResponse(
-            status_code=200,
-            content={
-                "success": True,
-                "data": {
-                    "definitions": definitions_data,
-                    "count": len(definitions_data),
-                    "active_only": active_only
-                }
-            }
+        response_data = {
+            "definitions": definitions_data,
+            "count": len(definitions_data),
+            "active_only": active_only
+        }
+
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="SLO definitions retrieved successfully"
         )
 
     except Exception as e:
-        logger.error(f"Failed to get SLO definitions: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve SLO definitions: {str(e)}")
+        return APIStandardizer.handle_exception(e, "SLO definitions retrieval")
 
 
-@router.get("/weekly/summary", response_model=Dict[str, Any])
+@router.get("/weekly/summary")
 async def get_weekly_metrics_summary(
     weeks: int = Query(4, ge=1, le=52, description="Number of weeks to include"),
     week_start: Optional[str] = Query(None, description="Start date for specific week (ISO format)"),
-    current_user: User = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_authenticated_user),
+    session: AsyncSession = Depends(get_db_session),
 ):
     """
     Get weekly metrics summary for KPI tracking and trend analysis.
@@ -130,6 +137,13 @@ async def get_weekly_metrics_summary(
     - Working capital optimization metrics
     """
     try:
+        # Validate parameters
+        if weeks < 1 or weeks > 52:
+            return APIStandardizer.error_response(
+                error_message="Weeks must be between 1 and 52",
+                status_code=StatusCodes.BAD_REQUEST
+            )
+
         from app.models.metrics import WeeklyMetric
         from sqlalchemy import select, and_, desc, func
 
@@ -138,7 +152,10 @@ async def get_weekly_metrics_summary(
             try:
                 week_start_date = datetime.fromisoformat(week_start.replace('Z', '+00:00')).date()
             except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid date format. Use ISO format.")
+                return APIStandardizer.error_response(
+                    error_message="Invalid date format. Use ISO format.",
+                    status_code=StatusCodes.BAD_REQUEST
+                )
         else:
             week_start_date = None
 
@@ -215,36 +232,31 @@ async def get_weekly_metrics_summary(
             avg_roi = 0
             trends = {}
 
-        return JSONResponse(
-            status_code=200,
-            content={
-                "success": True,
-                "data": {
-                    "weekly_metrics": metrics_data,
-                    "summary": {
-                        "total_weeks": len(metrics_data),
-                        "total_invoices_processed": total_invoices,
-                        "average_auto_processing_rate": round(avg_processing_rate, 2),
-                        "average_cost_per_invoice": round(avg_cost_per_invoice, 2),
-                        "average_roi_percentage": round(avg_roi, 2),
-                        "latest_week_date": metrics_data[0]["week_start_date"] if metrics_data else None,
-                    },
-                    "trends": trends,
-                    "performance_periods": {
-                        "p50_time_to_ready_minutes": [m["p50_time_to_ready_minutes"] for m in metrics_data if m["p50_time_to_ready_minutes"]],
-                        "p95_time_to_ready_minutes": [m["p95_time_to_ready_minutes"] for m in metrics_data if m["p95_time_to_ready_minutes"]],
-                        "p99_time_to_ready_minutes": [m["p99_time_to_ready_minutes"] for m in metrics_data if m["p99_time_to_ready_minutes"]],
-                    }
-                },
-                "message": "Weekly metrics summary retrieved successfully"
+        response_data = {
+            "weekly_metrics": metrics_data,
+            "summary": {
+                "total_weeks": len(metrics_data),
+                "total_invoices_processed": total_invoices,
+                "average_auto_processing_rate": round(avg_processing_rate, 2),
+                "average_cost_per_invoice": round(avg_cost_per_invoice, 2),
+                "average_roi_percentage": round(avg_roi, 2),
+                "latest_week_date": metrics_data[0]["week_start_date"] if metrics_data else None,
+            },
+            "trends": trends,
+            "performance_periods": {
+                "p50_time_to_ready_minutes": [m["p50_time_to_ready_minutes"] for m in metrics_data if m["p50_time_to_ready_minutes"]],
+                "p95_time_to_ready_minutes": [m["p95_time_to_ready_minutes"] for m in metrics_data if m["p95_time_to_ready_minutes"]],
+                "p99_time_to_ready_minutes": [m["p99_time_to_ready_minutes"] for m in metrics_data if m["p99_time_to_ready_minutes"]],
             }
+        }
+
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="Weekly metrics summary retrieved successfully"
         )
 
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Failed to get weekly metrics summary: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to retrieve weekly metrics: {str(e)}")
+        return APIStandardizer.handle_exception(e, "Weekly metrics summary retrieval")
 
 
 @router.get("/slos/{slo_id}/measurements", response_model=Dict[str, Any])

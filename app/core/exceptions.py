@@ -97,6 +97,17 @@ class EmailException(APIntakeException):
         )
 
 
+class EmailServiceException(EmailException):
+    """Raised when email service operations fail."""
+
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code="EMAIL_SERVICE_ERROR",
+            details=details,
+        )
+
+
 class EmailIngestionException(EmailException):
     """Raised when email ingestion fails."""
 
@@ -203,5 +214,16 @@ class SecurityException(APIntakeException):
         super().__init__(
             message=message,
             error_code="SECURITY_ERROR",
+            details=details,
+        )
+
+
+class LLMException(APIntakeException):
+    """Raised when LLM operations fail."""
+
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code="LLM_ERROR",
             details=details,
         )

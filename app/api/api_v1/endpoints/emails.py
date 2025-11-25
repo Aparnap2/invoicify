@@ -6,10 +6,18 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.api_v1 import deps
+from app.api.api_v1.standards import (
+    APIStandardizer,
+    EndpointValidator,
+    DatabaseHelper,
+    StatusCodes,
+    ErrorMessages,
+    get_db_session,
+    get_authenticated_user
+)
 from app.api.schemas.email import (
     EmailAuthorizationRequest,
     EmailAuthorizationResponse,
@@ -24,6 +32,7 @@ from app.api.schemas.email import (
     EmailStatisticsResponse,
 )
 from app.models.email import Email, EmailCredentials, EmailMonitoringConfig
+from app.models.user import User
 from app.services.email_ingestion_service import EmailIngestionService
 from app.services.gmail_service import GmailService
 from app.workers.email_tasks import (
@@ -39,10 +48,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/authorize/gmail", response_model=EmailAuthorizationResponse)
+@router.post("/authorize/gmail")
 async def authorize_gmail(
     request: EmailAuthorizationRequest,
-    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(get_authenticated_user),
 ) -> EmailAuthorizationResponse:
     """Get Gmail OAuth authorization URL."""
     try:
@@ -52,25 +61,28 @@ async def authorize_gmail(
             state=request.state
         )
 
-        return EmailAuthorizationResponse(
+        response_data = EmailAuthorizationResponse(
             authorization_url=authorization_url,
             state=state,
             expires_at=datetime.utcnow() + timedelta(hours=1)
         )
 
-    except Exception as e:
-        logger.error(f"Gmail authorization failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to generate authorization URL: {str(e)}"
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="Gmail authorization URL generated successfully",
+            status_code=StatusCodes.OK
         )
 
+    except Exception as e:
+        return APIStandardizer.handle_exception(e, "Gmail authorization")
 
-@router.post("/credentials/gmail", response_model=EmailCredentialsResponse)
+
+@router.post("/credentials/gmail")
 async def store_gmail_credentials(
     request: EmailCredentialsCreate,
-    db: AsyncSession = Depends(deps.get_db),
-) -> EmailCredentialsResponse:
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
+):
     """Store Gmail OAuth credentials."""
     try:
         gmail_service = GmailService()
@@ -86,7 +98,6 @@ async def store_gmail_credentials(
         user_info = await gmail_service.get_user_info()
 
         # Create credentials record
-        # In a real implementation, you would encrypt the credentials
         db_credentials = EmailCredentials(
             user_id=request.user_id,
             provider="gmail",
@@ -102,7 +113,7 @@ async def store_gmail_credentials(
         await db.commit()
         await db.refresh(db_credentials)
 
-        return EmailCredentialsResponse(
+        response_data = EmailCredentialsResponse(
             id=str(db_credentials.id),
             provider="gmail",
             provider_email=user_info["email_address"],
@@ -111,29 +122,29 @@ async def store_gmail_credentials(
             last_validated=db_credentials.last_validated
         )
 
-    except Exception as e:
-        logger.error(f"Failed to store Gmail credentials: {e}")
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to store credentials: {str(e)}"
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="Gmail credentials stored successfully",
+            status_code=StatusCodes.CREATED
         )
 
+    except Exception as e:
+        await db.rollback()
+        return APIStandardizer.handle_exception(e, "Gmail credentials storage")
 
-@router.post("/ingest/gmail", response_model=EmailIngestionResponse)
+
+@router.post("/ingest/gmail")
 async def ingest_gmail_emails(
     request: EmailIngestionRequest,
-    db: AsyncSession = Depends(deps.get_db),
-) -> EmailIngestionResponse:
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
+):
     """Manually trigger Gmail email ingestion."""
     try:
         # Get credentials from database
-        credentials = await db.get(EmailCredentials, request.credentials_id)
-        if not credentials:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Credentials not found"
-            )
+        credentials = await DatabaseHelper.get_by_id_or_404(
+            db, EmailCredentials, request.credentials_id
+        )
 
         # Convert to GmailCredentials format
         from app.services.gmail_service import GmailCredentials
@@ -154,7 +165,7 @@ async def ingest_gmail_emails(
             auto_process=request.auto_process
         )
 
-        return EmailIngestionResponse(
+        response_data = EmailIngestionResponse(
             task_id=task.id,
             status="started",
             user_id=str(credentials.user_id),
@@ -162,30 +173,28 @@ async def ingest_gmail_emails(
             started_at=datetime.utcnow()
         )
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Gmail ingestion failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Ingestion failed: {str(e)}"
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="Gmail ingestion started successfully",
+            status_code=StatusCodes.ACCEPTED
         )
 
+    except Exception as e:
+        return APIStandardizer.handle_exception(e, "Gmail email ingestion")
 
-@router.post("/monitoring/config", response_model=EmailMonitoringConfigResponse)
+
+@router.post("/monitoring/config")
 async def create_monitoring_config(
     request: EmailMonitoringConfigCreate,
-    db: AsyncSession = Depends(deps.get_db),
-) -> EmailMonitoringConfigResponse:
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
+):
     """Create email monitoring configuration."""
     try:
         # Validate credentials exist
-        credentials = await db.get(EmailCredentials, request.credentials_id)
-        if not credentials:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Credentials not found"
-            )
+        credentials = await DatabaseHelper.get_by_id_or_404(
+            db, EmailCredentials, request.credentials_id
+        )
 
         # Create monitoring config
         config = EmailMonitoringConfig(
@@ -225,7 +234,7 @@ async def create_monitoring_config(
 
             logger.info(f"Scheduled monitoring task {schedule_task.id} for user {request.user_id}")
 
-        return EmailMonitoringConfigResponse(
+        response_data = EmailMonitoringConfigResponse(
             id=str(config.id),
             user_id=str(config.user_id),
             is_active=config.is_active,
@@ -235,24 +244,28 @@ async def create_monitoring_config(
             next_run_at=config.next_run_at
         )
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to create monitoring config: {e}")
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create monitoring config: {str(e)}"
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="Email monitoring configuration created successfully",
+            status_code=StatusCodes.CREATED
         )
+
+    except Exception as e:
+        await db.rollback()
+        return APIStandardizer.handle_exception(e, "Email monitoring configuration creation")
 
 
 @router.get("/monitoring/status/{user_id}")
 async def get_monitoring_status(
     user_id: str,
-    db: AsyncSession = Depends(deps.get_db),
-) -> Dict[str, Any]:
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
+):
     """Get monitoring status for a user."""
     try:
+        # Validate user ID format
+        EndpointValidator.validate_uuid(user_id, "user_id")
+
         # Get task status
         task_status = get_email_monitoring_task_status(user_id)
 
@@ -263,7 +276,7 @@ async def get_monitoring_status(
         )
         configs = result.fetchall()
 
-        return {
+        response_data = {
             "user_id": user_id,
             "task_status": task_status,
             "monitoring_configs": len(configs),
@@ -271,21 +284,26 @@ async def get_monitoring_status(
             "checked_at": datetime.utcnow().isoformat()
         }
 
-    except Exception as e:
-        logger.error(f"Failed to get monitoring status: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get monitoring status: {str(e)}"
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="Email monitoring status retrieved successfully"
         )
+
+    except Exception as e:
+        return APIStandardizer.handle_exception(e, "Email monitoring status retrieval")
 
 
 @router.delete("/monitoring/{user_id}")
 async def stop_monitoring(
     user_id: str,
-    db: AsyncSession = Depends(deps.get_db),
-) -> Dict[str, Any]:
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
+):
     """Stop email monitoring for a user."""
     try:
+        # Validate user ID format
+        EndpointValidator.validate_uuid(user_id, "user_id")
+
         # Cancel scheduled task
         cancelled = cancel_email_monitoring(user_id)
 
@@ -296,31 +314,37 @@ async def stop_monitoring(
         )
         await db.commit()
 
-        return {
+        response_data = {
             "user_id": user_id,
             "cancelled": cancelled,
             "stopped_at": datetime.utcnow().isoformat()
         }
 
-    except Exception as e:
-        logger.error(f"Failed to stop monitoring: {e}")
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to stop monitoring: {str(e)}"
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="Email monitoring stopped successfully"
         )
 
+    except Exception as e:
+        await db.rollback()
+        return APIStandardizer.handle_exception(e, "Email monitoring stop")
 
-@router.get("/search", response_model=EmailSearchResponse)
+
+@router.get("/search")
 async def search_emails(
     user_id: str = Query(..., description="User ID"),
     query: str = Query(None, description="Search query"),
     limit: int = Query(50, ge=1, le=100, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Results offset"),
-    db: AsyncSession = Depends(deps.get_db),
-) -> EmailSearchResponse:
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
+):
     """Search for processed emails."""
     try:
+        # Validate parameters
+        EndpointValidator.validate_uuid(user_id, "user_id")
+        limit, offset = EndpointValidator.validate_pagination(limit, offset, 100)
+
         # Build search query
         sql = """
             SELECT e.*, COUNT(a.id) as attachment_count
@@ -349,37 +373,45 @@ async def search_emails(
         count_result = await db.execute(count_sql, params)
         total = count_result.scalar()
 
-        return EmailSearchResponse(
-            emails=[{
-                "id": str(email.id),
-                "subject": email.subject,
-                "from_email": email.from_email,
-                "date_sent": email.date_sent,
-                "status": email.status,
-                "attachment_count": email.attachment_count,
-                "security_flags": email.security_flags
-            } for email in emails],
+        email_data = [{
+            "id": str(email.id),
+            "subject": email.subject,
+            "from_email": email.from_email,
+            "date_sent": email.date_sent,
+            "status": email.status,
+            "attachment_count": email.attachment_count,
+            "security_flags": email.security_flags
+        } for email in emails]
+
+        return APIStandardizer.paginated_response(
+            data=email_data,
             total=total,
             limit=limit,
-            offset=offset
+            offset=offset,
+            message="Email search completed successfully"
         )
 
     except Exception as e:
-        logger.error(f"Email search failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed: {str(e)}"
-        )
+        return APIStandardizer.handle_exception(e, "Email search")
 
 
-@router.get("/statistics/{user_id}", response_model=EmailStatisticsResponse)
+@router.get("/statistics/{user_id}")
 async def get_email_statistics(
     user_id: str,
     days: int = Query(30, ge=1, le=365, description="Number of days"),
-    db: AsyncSession = Depends(deps.get_db),
-) -> EmailStatisticsResponse:
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
+):
     """Get email processing statistics."""
     try:
+        # Validate parameters
+        EndpointValidator.validate_uuid(user_id, "user_id")
+        if days < 1 or days > 365:
+            raise HTTPException(
+                status_code=StatusCodes.BAD_REQUEST,
+                detail="Days must be between 1 and 365"
+            )
+
         cutoff_date = datetime.utcnow() - timedelta(days=days)
 
         # Get statistics
@@ -413,7 +445,7 @@ async def get_email_statistics(
         attachment_result = await db.execute(attachment_sql, {"user_id": user_id, "cutoff_date": cutoff_date})
         attachment_stats = attachment_result.fetchone()
 
-        return EmailStatisticsResponse(
+        response_data = EmailStatisticsResponse(
             user_id=user_id,
             period_days=days,
             total_emails=stats.total_emails or 0,
@@ -430,51 +462,59 @@ async def get_email_statistics(
             generated_at=datetime.utcnow()
         )
 
-    except Exception as e:
-        logger.error(f"Failed to get email statistics: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get statistics: {str(e)}"
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="Email statistics retrieved successfully"
         )
+
+    except Exception as e:
+        return APIStandardizer.handle_exception(e, "Email statistics retrieval")
 
 
 @router.get("/health")
-async def email_health_check() -> Dict[str, Any]:
+async def email_health_check():
     """Health check for email services."""
     try:
         ingestion_service = EmailIngestionService()
         health_status = await ingestion_service.health_check()
 
-        return {
+        response_data = {
             "status": "healthy",
             "services": health_status,
             "timestamp": datetime.utcnow().isoformat()
         }
 
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="Email services health check completed"
+        )
+
     except Exception as e:
-        logger.error(f"Email health check failed: {e}")
-        return {
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        return APIStandardizer.error_response(
+            error_message="Email services health check failed",
+            status_code=StatusCodes.SERVICE_UNAVAILABLE,
+            error_details={"error": str(e)}
+        )
 
 
 @router.get("/tasks/active")
-async def get_active_tasks() -> Dict[str, Any]:
+async def get_active_tasks(
+    current_user: User = Depends(get_authenticated_user),
+):
     """Get list of active email monitoring tasks."""
     try:
         active_tasks = get_active_email_tasks()
 
-        return {
+        response_data = {
             "active_tasks": active_tasks,
             "total_active": len(active_tasks),
             "timestamp": datetime.utcnow().isoformat()
         }
 
-    except Exception as e:
-        logger.error(f"Failed to get active tasks: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get active tasks: {str(e)}"
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="Active email tasks retrieved successfully"
         )
+
+    except Exception as e:
+        return APIStandardizer.handle_exception(e, "Active email tasks retrieval")

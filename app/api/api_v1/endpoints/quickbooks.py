@@ -127,9 +127,45 @@ async def quickbooks_callback(
         user_info = await qb_service.get_user_info(token_response["access_token"])
         company_info = await qb_service.get_company_info(token_response["access_token"], realm_id)
 
-        # Extract user_id from state or user info (this should be stored in the state)
-        # For now, we'll use a default user or create a new connection
-        user_uuid = uuid.uuid4()  # TODO: Extract from state or create proper user management
+        # Extract user_id from state parameter
+        user_uuid = None
+        if state:
+            try:
+                # State format: timestamp:random_string:user_id:additional_data
+                state_parts = state.split(':')
+                if len(state_parts) >= 3:
+                    user_uuid = uuid.UUID(state_parts[2])
+                elif len(state_parts) >= 2:
+                    # Try to parse as user_id only
+                    try:
+                        user_uuid = uuid.UUID(state_parts[1])
+                    except ValueError:
+                        pass
+            except (ValueError, IndexError) as e:
+                logger.warning(f"Could not extract user_id from state: {state}, error: {str(e)}")
+        
+        if not user_uuid:
+            # Create or get user from email if available
+            if 'email' in user_info:
+                from app.services.auth.user_service import UserService
+                
+                user_service = UserService()
+                user = await user_service.get_or_create_user_by_email(
+                    db=db,
+                    email=user_info['email'],
+                    full_name=user_info.get('givenName', '') + ' ' + user_info.get('familyName', ''),
+                    role='processor'  # Default role for QuickBooks users
+                )
+                if user:
+                    user_uuid = user.id
+                else:
+                    # Fallback to creating a new user
+                    user_uuid = uuid.uuid4()
+                    logger.warning(f"Created fallback user for QuickBooks integration: {user_uuid}")
+            else:
+                # Last resort - create a new user
+                user_uuid = uuid.uuid4()
+                logger.warning(f"Created new user for QuickBooks integration: {user_uuid}")
 
         # Create or update connection
         connection = QuickBooksConnection(

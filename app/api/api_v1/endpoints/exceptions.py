@@ -9,9 +9,18 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.api_v1.standards import (
+    APIStandardizer,
+    EndpointValidator,
+    DatabaseHelper,
+    StatusCodes,
+    ErrorMessages,
+    get_db_session,
+    get_authenticated_user
+)
 from app.api.schemas.exception import (
     ExceptionAction,
     ExceptionBatchUpdate,
@@ -57,8 +66,7 @@ from app.api.schemas.exception import (
     CFOGradeBatchUpdate,
     CFOExceptionMetrics,
 )
-from app.api.schemas.common import ErrorResponse
-from app.db.session import get_db
+from app.models.user import User
 from app.services.exception_service import ExceptionService
 from app.services.exception_explainability_service import ExceptionExplainabilityService
 from app.core.logging import get_logger
@@ -76,7 +84,7 @@ async def get_explainability_service() -> ExceptionExplainabilityService:
     return ExceptionExplainabilityService()
 
 
-@router.get("/", response_model=ExceptionListResponse)
+@router.get("/")
 async def list_exceptions(
     invoice_id: Optional[str] = Query(None, description="Filter by invoice ID"),
     status: Optional[ExceptionStatus] = Query(None, description="Filter by status"),
@@ -88,7 +96,8 @@ async def list_exceptions(
     limit: int = Query(50, ge=1, le=1000, description="Number of results to return"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
     exception_service: ExceptionService = Depends(get_exception_service),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
 ):
     """
     List exceptions with optional filtering and pagination.
@@ -97,6 +106,15 @@ async def list_exceptions(
     various criteria including invoice ID, status, severity, category, and date ranges.
     """
     try:
+        # Validate parameters
+        if invoice_id:
+            EndpointValidator.validate_uuid(invoice_id, "invoice_id")
+        
+        limit, offset = EndpointValidator.validate_pagination(limit, offset, 1000)
+        
+        if created_after and created_before:
+            EndpointValidator.validate_date_range(created_after, created_before, 365)
+
         filter_params = ExceptionFilter(
             invoice_id=invoice_id,
             status=status,
@@ -121,14 +139,20 @@ async def list_exceptions(
         )
 
         logger.info(f"Listed {len(result.exceptions)} exceptions (total: {result.total})")
-        return result
+        
+        return APIStandardizer.paginated_response(
+            data=result.exceptions,
+            total=result.total,
+            limit=limit,
+            offset=offset,
+            message="Exceptions listed successfully"
+        )
 
     except Exception as e:
-        logger.error(f"Error listing exceptions: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list exceptions")
+        return APIStandardizer.handle_exception(e, "Exception listing")
 
 
-@router.get("/search", response_model=ExceptionSearchResponse)
+@router.get("/search")
 async def search_exceptions(
     query: str = Query(..., description="Search query"),
     status: Optional[ExceptionStatus] = Query(None, description="Filter by status"),
@@ -139,7 +163,8 @@ async def search_exceptions(
     limit: int = Query(50, ge=1, le=1000, description="Number of results to return"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
     exception_service: ExceptionService = Depends(get_exception_service),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
 ):
     """
     Search exceptions by text query with optional filtering.
@@ -148,6 +173,21 @@ async def search_exceptions(
     filtering options and customizable sorting.
     """
     try:
+        # Validate parameters
+        if not query or len(query.strip()) == 0:
+            return APIStandardizer.error_response(
+                error_message="Search query is required",
+                status_code=StatusCodes.BAD_REQUEST
+            )
+        
+        limit, offset = EndpointValidator.validate_pagination(limit, offset, 1000)
+        
+        if sort_order not in ["asc", "desc"]:
+            return APIStandardizer.error_response(
+                error_message="Sort order must be 'asc' or 'desc'",
+                status_code=StatusCodes.BAD_REQUEST
+            )
+
         search_params = ExceptionSearch(
             query=query,
             filters=ExceptionFilter(
@@ -179,30 +219,34 @@ async def search_exceptions(
                query.lower() in exc.reason_code.lower()
         ]
 
-        search_response = ExceptionSearchResponse(
-            results=filtered_exceptions,
-            total=len(filtered_exceptions),
-            query=query,
-            filters=search_params.filters,
-            sort_by=sort_by,
-            sort_order=sort_order,
-            limit=limit,
-            offset=offset
-        )
+        search_response_data = {
+            "results": filtered_exceptions,
+            "total": len(filtered_exceptions),
+            "query": query,
+            "filters": search_params.filters,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+            "limit": limit,
+            "offset": offset
+        }
 
         logger.info(f"Search for '{query}' returned {len(filtered_exceptions)} results")
-        return search_response
+        
+        return APIStandardizer.success_response(
+            data=search_response_data,
+            message="Exception search completed successfully"
+        )
 
     except Exception as e:
-        logger.error(f"Error searching exceptions: {e}")
-        raise HTTPException(status_code=500, detail="Failed to search exceptions")
+        return APIStandardizer.handle_exception(e, "Exception search")
 
 
-@router.get("/{exception_id}", response_model=ExceptionResponse)
+@router.get("/{exception_id}")
 async def get_exception(
     exception_id: str,
     exception_service: ExceptionService = Depends(get_exception_service),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
 ):
     """
     Get exception details by ID.
@@ -211,28 +255,36 @@ async def get_exception(
     including its current status, resolution history, and suggested actions.
     """
     try:
+        # Validate exception ID
+        EndpointValidator.validate_uuid(exception_id, "exception_id")
+        
         exception = await exception_service.get_exception(exception_id, session=db)
 
         if not exception:
-            raise HTTPException(status_code=404, detail="Exception not found")
+            return APIStandardizer.error_response(
+                error_message=ErrorMessages.NOT_FOUND,
+                status_code=StatusCodes.NOT_FOUND
+            )
 
         logger.info(f"Retrieved exception {exception_id}")
-        return exception
+        
+        return APIStandardizer.success_response(
+            data=exception,
+            message="Exception retrieved successfully"
+        )
 
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error getting exception {exception_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve exception")
+        return APIStandardizer.handle_exception(e, "Exception retrieval")
 
 
-@router.post("/{exception_id}/resolve", response_model=ExceptionResolutionResponse)
+@router.post("/{exception_id}/resolve")
 async def resolve_exception(
     exception_id: str,
     resolution_request: ExceptionResolutionRequest,
     background_tasks: BackgroundTasks,
     exception_service: ExceptionService = Depends(get_exception_service),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
 ):
     """
     Resolve an exception with specified action and notes.
@@ -241,10 +293,16 @@ async def resolve_exception(
     adding notes, and optionally auto-approving the associated invoice.
     """
     try:
+        # Validate exception ID
+        EndpointValidator.validate_uuid(exception_id, "exception_id")
+        
         # Get exception before resolution for comparison
         exception_before = await exception_service.get_exception(exception_id, session=db)
         if not exception_before:
-            raise HTTPException(status_code=404, detail="Exception not found")
+            return APIStandardizer.error_response(
+                error_message=ErrorMessages.NOT_FOUND,
+                status_code=StatusCodes.NOT_FOUND
+            )
 
         # Resolve the exception
         resolved_exception = await exception_service.resolve_exception(
@@ -267,29 +325,35 @@ async def resolve_exception(
                 resolution_request.resolved_by
             )
 
-        return ExceptionResolutionResponse(
+        response_data = ExceptionResolutionResponse(
             success=True,
             exception=resolved_exception,
             message=f"Exception resolved successfully with action: {resolution_request.action.value}",
             invoice_auto_approved=resolution_request.auto_approve_invoice
         )
 
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="Exception resolved successfully"
+        )
+
     except ValueError as e:
         logger.warning(f"Invalid resolution for exception {exception_id}: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
+        return APIStandardizer.error_response(
+            error_message=str(e),
+            status_code=StatusCodes.BAD_REQUEST
+        )
     except Exception as e:
-        logger.error(f"Error resolving exception {exception_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to resolve exception")
+        return APIStandardizer.handle_exception(e, "Exception resolution")
 
 
-@router.post("/batch-resolve", response_model=ExceptionBatchResolutionResponse)
+@router.post("/batch-resolve")
 async def batch_resolve_exceptions(
     batch_request: ExceptionBatchUpdate,
     background_tasks: BackgroundTasks,
     exception_service: ExceptionService = Depends(get_exception_service),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
 ):
     """
     Resolve multiple exceptions at once.
@@ -298,6 +362,13 @@ async def batch_resolve_exceptions(
     similar exceptions across multiple invoices simultaneously.
     """
     try:
+        # Validate batch request
+        if not batch_request.exception_ids:
+            return APIStandardizer.error_response(
+                error_message="No exception IDs provided for batch resolution",
+                status_code=StatusCodes.BAD_REQUEST
+            )
+
         resolved_exceptions = await exception_service.batch_resolve_exceptions(
             exception_ids=batch_request.exception_ids,
             batch_request=batch_request,
@@ -324,7 +395,7 @@ async def batch_resolve_exceptions(
             if batch_request.auto_approve_invoices
         ]
 
-        return ExceptionBatchResolutionResponse(
+        response_data = ExceptionBatchResolutionResponse(
             success_count=len(resolved_exceptions),
             error_count=0,  # Would be populated with actual errors in full implementation
             resolved_exceptions=resolved_exceptions,
@@ -332,16 +403,21 @@ async def batch_resolve_exceptions(
             invoices_auto_approved=auto_approved_invoices
         )
 
+        return APIStandardizer.success_response(
+            data=response_data,
+            message="Batch exception resolution completed successfully"
+        )
+
     except Exception as e:
-        logger.error(f"Error in batch exception resolution: {e}")
-        raise HTTPException(status_code=500, detail="Failed to resolve exceptions in batch")
+        return APIStandardizer.handle_exception(e, "Batch exception resolution")
 
 
-@router.get("/metrics/summary", response_model=ExceptionMetrics)
+@router.get("/metrics/summary")
 async def get_exception_metrics(
     days: int = Query(30, ge=1, le=365, description="Number of days to include in metrics"),
     exception_service: ExceptionService = Depends(get_exception_service),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_authenticated_user),
 ):
     """
     Get exception metrics for the specified period.
@@ -350,14 +426,24 @@ async def get_exception_metrics(
     resolution rates, trends, and breakdowns by category and severity.
     """
     try:
+        # Validate parameters
+        if days < 1 or days > 365:
+            return APIStandardizer.error_response(
+                error_message="Days must be between 1 and 365",
+                status_code=StatusCodes.BAD_REQUEST
+            )
+
         metrics = await exception_service.get_exception_metrics(days=days, session=db)
 
         logger.info(f"Generated exception metrics for {days} days")
-        return metrics
+        
+        return APIStandardizer.success_response(
+            data=metrics,
+            message="Exception metrics generated successfully"
+        )
 
     except Exception as e:
-        logger.error(f"Error generating exception metrics: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate exception metrics")
+        return APIStandardizer.handle_exception(e, "Exception metrics generation")
 
 
 @router.get("/dashboard", response_model=ExceptionDashboard)
