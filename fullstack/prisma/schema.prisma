@@ -1,0 +1,210 @@
+// Prisma schema for Invoicify
+// Run `pnpm prisma:generate` after changes
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model for authentication
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  role          UserRole  @default(USER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  invoices      Invoice[]
+  approvals     InvoiceApproval[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  APPROVER
+  VIEWER
+}
+
+// Account model for OAuth (NextAuth/Better Auth)
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+// Session model
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// Verification token model
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// Invoice model
+model Invoice {
+  id              String        @id @default(cuid())
+  vendorName      String
+  vendorAddress   String?
+  vendorTaxId     String?
+  invoiceNumber   String
+  invoiceDate     DateTime
+  dueDate         DateTime
+  currency        String        @default("USD")
+  subtotal        Decimal       @db.Decimal(12, 2)
+  taxAmount       Decimal       @db.Decimal(12, 2) @default(0)
+  totalAmount     Decimal       @db.Decimal(12, 2)
+  paymentTerms    String?
+  poNumber        String?
+  notes           String?
+
+  // File info
+  sourceFileName  String?
+  sourceFileType  String?
+
+  // Status tracking
+  status          InvoiceStatus @default(NEW)
+  extractedData   Json?
+  rawText         String?
+
+  // AI processing
+  confidenceScore Float?
+  requiresApproval Boolean      @default(false)
+
+  // Metadata
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  createdById     String
+  createdBy       User          @relation(fields: [createdById], references: [id])
+
+  // Relations
+  lineItems       LineItem[]
+  approvals       InvoiceApproval[]
+  auditLogs       AuditLog[]
+
+  @@unique([invoiceNumber, vendorName])
+  @@index([status])
+  @@index([createdAt])
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  NEW
+  EXTRACTING
+  EXTRACTED
+  VALIDATING
+  MATCHED
+  EXCEPTION
+  APPROVAL_PENDING
+  APPROVED
+  REJECTED
+  POSTED
+  ARCHIVED
+}
+
+// Line items for invoices
+model LineItem {
+  id            String  @id @default(cuid())
+  invoiceId     String
+  invoice       Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  lineNumber    Int
+  description   String
+  quantity      Decimal @db.Decimal(12, 4)
+  unitPrice     Decimal @db.Decimal(12, 2)
+  unitOfMeasure String  @default("EA")
+  amount        Decimal @db.Decimal(12, 2)
+  taxCode       String?
+  glCode        String?
+
+  createdAt     DateTime @default(now())
+
+  @@index([invoiceId])
+  @@map("line_items")
+}
+
+// Approval workflow
+model InvoiceApproval {
+  id          String         @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  approverId  String
+  approver    User           @relation(fields: [approverId], references: [id])
+
+  status      ApprovalStatus @default(PENDING)
+  comments    String?
+  riskLevel   String?
+
+  decisionAt  DateTime?
+  createdAt   DateTime       @default(now())
+
+  @@index([invoiceId])
+  @@index([approverId])
+  @@map("invoice_approvals")
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// Audit log for tracking changes
+model AuditLog {
+  id          String   @id @default(cuid())
+  invoiceId   String?
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  action      String
+  entityType  String
+  entityId    String
+  oldValue    Json?
+  newValue    Json?
+  performedBy String?
+  ipAddress   String?
+
+  createdAt   DateTime @default(now())
+
+  @@index([invoiceId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
