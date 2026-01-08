@@ -21,6 +21,8 @@ Finance/Accounts Payable teams, CFOs, Controllers
 * Slow multi-step approval loops
 * Time-consuming GL coding tasks
 
+**Architecture:** Cloudflare Edge (Workers + Pages + D1 + R2 + Queues) with Python AI Service
+
 ---
 
 ## 🎯 Outcome Promise
@@ -124,55 +126,88 @@ After approvals, update ERP (NetSuite, Odoo, SAP, QuickBooks), assign GL codes, 
 ```
 (Invoices Uploaded via Email/Portal/Scanner)
               ↓
-   Ingestion API (Hono / Next.js)
+   Cloudflare Workers + Hono API
               ↓
-   Normalized Event → Postgres
+   Normalized Event → D1 Database (SQLite)
               ↓
- Celery Worker picks invoice events
+   Cloudflare Queues (Async Processing)
               ↓
- DecisionRequest to FastAPI + LangGraph
-   (OCR + Matching + Approval Routing)
+   Python AI Service (Pydantic AI + LangGraph)
               ↓
- DecisionResponse
+   Workers AI (Llama 3.1 via OpenAI SDK)
               ↓
- UI (Next.js) shows escalations & hits
+   Decision Response → Update D1
               ↓
- HITL approval
+   Cloudflare Pages (Next.js Frontend)
               ↓
- Execution Adapter → ERP/Accounting
+   HITL approval (via API)
               ↓
- Audit Log & Observability
+   Execution Adapter → ERP/Accounting
+              ↓
+   Audit Log & Observability (D1)
 ```
+
+**Architecture Notes:**
+- **Workers API**: Hono-based CRUD endpoints at edge
+- **D1**: SQLite database with Drizzle ORM (no connection pooling needed)
+- **Queues**: Async job processing for heavy AI tasks
+- **Python AI Service**: Separate FastAPI service calling Workers AI via OpenAI SDK
+- **R2**: Invoice file storage (no egress fees)
 
 ---
 
-## 🧱 Data Model (Drizzle + Postgres)
+## 🧱 Data Model (Drizzle + Cloudflare D1)
 
-**Invoice Events Table**
+**Invoice Events Table (SQLite)**
 
-```ts
-export const invoices = pgTable("invoices", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  vendor: text("vendor").notNull(),
-  invoice_number: text("invoice_number").notNull(),
-  due_date: date("due_date").notNull(),
-  total_amount: numeric("total_amount").notNull(),
-  currency: text("currency").notNull(),
-  extracted_fields: jsonb("extracted_fields").notNull(),
-  status: text("status").notNull(), // new, matched, exception, approved, posted
-  created_at: timestamp("created_at").defaultNow()
+```typescript
+import { sqliteTable, text, real, integer } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+
+export const invoices = sqliteTable("invoices", {
+  id: text("id").primaryKey(), // UUID string
+  vendorName: text("vendor_name").notNull(),
+  invoiceNumber: text("invoice_number").notNull(),
+  dueDate: text("due_date"),
+  totalAmount: real("total_amount").notNull(),
+  currency: text("currency").default("USD"),
+  rawContent: text("raw_content"),
+  extractedData: text("extracted_data"), // JSON string
+  status: text("status").default("NEW"),
+  confidenceScore: real("confidence_score"),
+  createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at"),
 });
-```
 
-**Approvals / Escalations**
+export const lineItems = sqliteTable("line_items", {
+  id: text("id").primaryKey(),
+  invoiceId: text("invoice_id").references(() => invoices.id),
+  description: text("description").notNull(),
+  quantity: real("quantity").notNull(),
+  unitPrice: real("unit_price").notNull(),
+  amount: real("amount").notNull(),
+});
 
-```ts
-export const invoice_approvals = pgTable("invoice_approvals", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  invoice_id: text("invoice_id").notNull(),
-  approver: text("approver").notNull(),
-  status: text("status").notNull(), // pending|approved|rejected
-  updated_at: timestamp("updated_at").defaultNow()
+export const invoiceApprovals = sqliteTable("invoice_approvals", {
+  id: text("id").primaryKey(),
+  invoiceId: text("invoice_id").notNull().references(() => invoices.id),
+  approverId: text("approver_id").notNull(),
+  status: text("status").notNull(), // APPROVED | REJECTED
+  comments: text("comments"),
+  riskLevel: text("risk_level"),
+  decisionAt: text("decision_at"),
+  createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const auditLogs = sqliteTable("audit_logs", {
+  id: text("id").primaryKey(),
+  action: text("action").notNull(), // CREATE | UPDATE | APPROVE | REJECT | DELETE
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id").notNull(),
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  performedBy: text("performed_by"),
+  createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
 });
 ```
 
@@ -238,29 +273,126 @@ graph.add_edge("validate_po", "escalate")
 
 ## 🧰 Ready-to-Paste API Endpoints
 
-**Invoice Ingest Endpoint (JS / Hono)**
+**Cloudflare Worker API (TypeScript / Hono)**
 
-```ts
-app.post("/invoices/upload", async (c) => {
-  const { rawContent } = await c.req.json();
-  await db.insert(invoices).values({ raw_content: rawContent, status: "new" });
-  return c.json({ ok: true });
+```typescript
+// src/index.ts
+import { Hono } from 'hono';
+import { drizzle } from 'drizzle-orm/d1';
+import { invoices } from './db/schema';
+import { eq, desc } from 'drizzle-orm';
+
+interface Env {
+  DB: D1Database;
+  AI: Ai;
+  INVOICE_BUCKET: R2Bucket;
+}
+
+const app = new Hono<{ Bindings: Env }>();
+
+// GET /api/invoices - List invoices
+app.get('/api/invoices', async (c) => {
+  const db = drizzle(c.env.DB);
+  const result = await db.select()
+    .from(invoices)
+    .orderBy(desc(invoices.createdAt))
+    .limit(20)
+    .all();
+  return c.json({ invoices: result });
 });
+
+// GET /api/invoices/:id - Get single invoice
+app.get('/api/invoices/:id', async (c) => {
+  const db = drizzle(c.env.DB);
+  const result = await db.select()
+    .from(invoices)
+    .where(eq(invoices.id, c.req.param('id')))
+    .get();
+  return result ? c.json(result) : c.json({ error: 'Not found' }, 404);
+});
+
+// POST /api/invoices - Create invoice
+app.post('/api/invoices', async (c) => {
+  const db = drizzle(c.env.DB);
+  const body = await c.req.json();
+
+  const invoice = await db.insert(invoices).values({
+    id: crypto.randomUUID(),
+    vendorName: body.vendorName,
+    invoiceNumber: body.invoiceNumber,
+    totalAmount: body.totalAmount,
+    currency: body.currency || 'USD',
+    status: 'NEW',
+    rawContent: body.rawContent,
+    createdAt: new Date().toISOString(),
+  }).returning().get();
+
+  return c.json(invoice, 201);
+});
+
+// PATCH /api/invoices/:id/status - Update status
+app.patch('/api/invoices/:id/status', async (c) => {
+  const db = drizzle(c.env.DB);
+  const { status } = await c.req.json();
+
+  await db.update(invoices)
+    .set({ status, updatedAt: new Date().toISOString() })
+    .where(eq(invoices.id, c.req.param('id')));
+
+  return c.json({ success: true });
+});
+
+export default app;
 ```
 
-**Decision Endpoint (Python / FastAPI)**
+**Python AI Service Decision Endpoint (FastAPI + Workers AI)**
 
-```py
-@app.post("/ai/decide_invoice")
-def decide_invoice(req: DecisionRequest):
-    result = graph.invoke({"raw_content": req.invoice_content})
-    return DecisionResponse(
-        request_id=req.request_id,
-        state=result["decision_state"],
-        summary="Invoice processed",
-        confidence=0.85,
-        recommendations=[]
+```python
+# ai/app/api/routes.py
+from fastapi import APIRouter
+from openai import OpenAI
+from pydantic import BaseModel
+from app.graphs.invoice_workflow import create_invoice_workflow
+
+router = APIRouter()
+
+class WorkersAIClient:
+    def __init__(self, account_id: str, api_token: str):
+        self.client = OpenAI(
+            api_key=api_token,
+            base_url=f"https://gateway.ai.cloudflare.com/v1/{account_id}/gateway/openai"
+        )
+
+    async def extract_invoice(self, raw_content: str) -> dict:
+        response = self.client.chat.completions.create(
+            model="@cf/meta/llama-3.1-8b-instruct",
+            messages=[
+                {"role": "system", "content": "Extract invoice data as JSON. Include: vendorName, invoiceNumber, totalAmount, lineItems, dueDate."},
+                {"role": "user", "content": raw_content}
+            ],
+            response_format={"type": "json_object"}
+        )
+        return json.loads(response.choices[0].message.content)
+
+class DecisionRequest(BaseModel):
+    invoice_id: str
+    raw_content: str
+
+@router.post("/ai/decide_invoice")
+async def decide_invoice(req: DecisionRequest):
+    # Run LangGraph workflow with Workers AI
+    workflow = create_invoice_workflow()
+    result = await workflow.run(
+        raw_content=req.raw_content,
+        invoice_id=req.invoice_id
     )
+    return {
+        "request_id": req.invoice_id,
+        "state": result["decision_state"],
+        "confidence": result.get("confidence", 0.85),
+        "extracted_data": result.get("extracted_fields"),
+        "requires_approval": result["decision_state"] == "approval_pending"
+    }
 ```
 
 ---
@@ -269,13 +401,17 @@ def decide_invoice(req: DecisionRequest):
 
 ### **Technical**
 
-* Clean repo with:
+* Clean repo with Cloudflare edge architecture:
 
-  * Ingestion API
-  * Normalization + OCR
-  * Agentic workflow engine
-  * Approval UI
-  * Execution adapter
+  * **Cloudflare Workers** - Hono-based API at edge (low latency worldwide)
+  * **Cloudflare Pages** - Next.js frontend deployment
+  * **Cloudflare D1** - SQLite database with Drizzle ORM
+  * **Cloudflare R2** - Invoice file storage (no egress fees)
+  * **Cloudflare Queues** - Async job processing
+  * **Python AI Service** - Pydantic AI + LangGraph + Workers AI
+  * **Agentic workflow engine** - LangGraph with human-in-the-loop
+  * **Approval UI** - React dashboard
+  * **Execution adapter** - ERP integration ready
 
 ### **Documentation**
 
