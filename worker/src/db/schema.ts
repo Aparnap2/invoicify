@@ -182,3 +182,18 @@ export const syncQueue = sqliteTable("sync_queue", {
   scheduledAt: text("scheduled_at").default(sql`CURRENT_TIMESTAMP`),
   processedAt: text("processed_at"),
 });
+
+/**
+ * Payment tracking
+ */
+export const payments = sqliteTable("payments", {
+  id: text("id").primaryKey(),
+  invoiceId: text("invoice_id")
+    .notNull()
+    .references(() => invoices.id, { onDelete: "cascade" }),
+  scheduledDate: text("scheduled_date").notNull(),
+  amount: real("amount").notNull().default(0),
+  status: text("status").notNull().default("scheduled"),
+  executedAt: text("executed_at"),
+  createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
+});

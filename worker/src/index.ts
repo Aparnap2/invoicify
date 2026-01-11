@@ -5,6 +5,10 @@ import { invoicesRoutes } from "./routes/invoices";
 import { extractRoutes } from "./routes/extract";
 import { uploadRoutes } from "./routes/upload";
 import { riskRoutes } from "./routes/risk";
+import { vendorTrustRoutes } from "./routes/vendor-trust";
+import { paymentRoutes } from "./routes/payments";
+import { workflowRoutes } from "./routes/workflow";
+import { quickbooksRoutes } from "./routes/quickbooks";
 import type { Env } from "./db";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -31,6 +35,10 @@ app.route("/api/v1/invoices", invoicesRoutes);
 app.route("/api/v1/extract", extractRoutes);
 app.route("/api/v1/upload", uploadRoutes);
 app.route("/api/v1/risk", riskRoutes);
+app.route("/api/v1/vendor-trust", vendorTrustRoutes);
+app.route("/api/v1/payments", paymentRoutes);
+app.route("/api/v1/workflow", workflowRoutes);
+app.route("/api/v1/quickbooks", quickbooksRoutes);
 
 // Error handling
 app.onError((err, c) => {

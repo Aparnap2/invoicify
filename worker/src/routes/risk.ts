@@ -6,6 +6,18 @@ import {
   resolveRiskIndicator,
   type RiskAssessmentResult,
 } from "../lib/fraud-detection";
+import {
+  calculateRisk,
+  routeAction,
+  assessInvoiceRisk,
+  WEIGHT_AMOUNT,
+  WEIGHT_DUPLICATE,
+  WEIGHT_VENDOR_TRUST,
+  WEIGHT_RUNWAY,
+  WEIGHT_NEW_VENDOR,
+} from "../lib/risk-scoring";
+import { updateVendorTrust, updateRiskWeights } from "../lib/vendor-trust";
+import { AuditTracer, getInvoiceAuditTrail } from "../lib/audit-tracer";
 import { eq, sql, desc, and, gte } from "drizzle-orm";
 import type { Env } from "../db";
 
@@ -164,6 +176,193 @@ riskRoutes.get("/stats/overview", async (c) => {
     byRiskLevel: byLevel,
     averageRiskScore: avgRiskScore.avg,
     criticalCount: criticalCount.count,
+  });
+});
+
+/**
+ * Calculate risk using PRD formula
+ * POST /api/v1/risk/calculate
+ *
+ * PRD Formula: 0.30*amount_deviation + 0.25*duplicate_similarity + 0.20*(1-vendor_trust) + 0.15*runway_pressure + 0.10*is_new_vendor
+ */
+riskRoutes.post("/calculate", async (c) => {
+  const body = await c.req.json<{
+    amountDeviation: number;
+    duplicateSimilarity: number;
+    vendorTrust: number;
+    runwayPressure: number;
+    isNewVendor: number;
+  }>();
+
+  const { amountDeviation, duplicateSimilarity, vendorTrust, runwayPressure, isNewVendor } = body;
+
+  // Validate inputs
+  if (
+    amountDeviation === undefined ||
+    duplicateSimilarity === undefined ||
+    vendorTrust === undefined ||
+    runwayPressure === undefined ||
+    isNewVendor === undefined
+  ) {
+    return c.json(
+      {
+        error: "Missing required fields",
+        required: ["amountDeviation", "duplicateSimilarity", "vendorTrust", "runwayPressure", "isNewVendor"],
+      },
+      400
+    );
+  }
+
+  const assessment = calculateRisk({
+    amountDeviation,
+    duplicateSimilarity,
+    vendorTrust,
+    runwayPressure,
+    isNewVendor,
+  });
+
+  const action = routeAction(assessment.score, assessment.confidence);
+
+  return c.json({
+    success: true,
+    data: {
+      ...assessment,
+      action,
+      formula: {
+        weights: {
+          amountDeviation: WEIGHT_AMOUNT,
+          duplicateSimilarity: WEIGHT_DUPLICATE,
+          vendorTrust: WEIGHT_VENDOR_TRUST,
+          runwayPressure: WEIGHT_RUNWAY,
+          isNewVendor: WEIGHT_NEW_VENDOR,
+        },
+        formula: "0.30*amount + 0.25*duplicate + 0.20*(1-trust) + 0.15*runway + 0.10*new_vendor",
+      },
+    },
+  });
+});
+
+/**
+ * Get PRD risk weights
+ * GET /api/v1/risk/weights
+ */
+riskRoutes.get("/weights", async (c) => {
+  return c.json({
+    weights: {
+      amountDeviation: WEIGHT_AMOUNT,
+      duplicateSimilarity: WEIGHT_DUPLICATE,
+      vendorTrust: WEIGHT_VENDOR_TRUST,
+      runwayPressure: WEIGHT_RUNWAY,
+      isNewVendor: WEIGHT_NEW_VENDOR,
+    },
+    thresholds: {
+      autoApprove: 0.3,
+      hitl: 0.6,
+      escalate: 0.6,
+      confidenceRequired: 0.8,
+    },
+  });
+});
+
+/**
+ * Full invoice risk assessment using PRD formula
+ * POST /api/v1/risk/:invoiceId/assess
+ */
+riskRoutes.post("/:invoiceId/assess", async (c) => {
+  const env = c.env;
+  const invoiceId = c.req.param("invoiceId");
+  const db = getDb(env);
+
+  const [invoice] = await db
+    .select()
+    .from(schema.invoices)
+    .where(eq(schema.invoices.id, invoiceId))
+    .limit(1);
+
+  if (!invoice) {
+    return c.json({ error: "Invoice not found" }, 404);
+  }
+
+  const result = await assessInvoiceRisk(env, invoiceId);
+
+  if (!result) {
+    return c.json({ error: "Failed to assess risk" }, 500);
+  }
+
+  // Log audit event
+  const tracer = new AuditTracer(env);
+  const action = routeAction(result.score, result.confidence);
+  await tracer.logRiskAssessment(
+    invoiceId,
+    result.score,
+    result.level,
+    result.signals,
+    action
+  );
+
+  return c.json({
+    success: true,
+    data: {
+      ...result,
+      action,
+    },
+  });
+});
+
+/**
+ * Submit feedback for learning loop
+ * POST /api/v1/risk/feedback
+ *
+ * PRD Section E: Learn from approvals/rejections
+ */
+riskRoutes.post("/feedback", async (c) => {
+  const env = c.env;
+  const body = await c.req.json<{
+    vendorId: string;
+    invoiceId: string;
+    originalRiskScore: number;
+    originalConfidence: number;
+    decision: "approved" | "rejected" | "delayed";
+    isDuplicate?: boolean;
+  }>();
+
+  const { vendorId, invoiceId, originalRiskScore, originalConfidence, decision, isDuplicate } = body;
+
+  if (!vendorId || !invoiceId || originalRiskScore === undefined || !decision) {
+    return c.json({ error: "Missing required fields" }, 400);
+  }
+
+  // Update vendor trust
+  const trustResult = await updateVendorTrust(env, vendorId, decision, originalRiskScore, false);
+
+  // Log audit event
+  const tracer = new AuditTracer(env);
+  await tracer.logFeedbackReceived(invoiceId, vendorId, decision, originalRiskScore);
+
+  return c.json({
+    success: true,
+    data: {
+      vendorTrustAdjustment: trustResult.adjustment,
+      newTrustScore: trustResult.newTrustScore,
+      decision,
+      originalRiskScore,
+    },
+  });
+});
+
+/**
+ * Get audit trail for an invoice
+ * GET /api/v1/risk/:invoiceId/audit
+ */
+riskRoutes.get("/:invoiceId/audit", async (c) => {
+  const env = c.env;
+  const invoiceId = c.req.param("invoiceId");
+
+  const auditTrail = await getInvoiceAuditTrail(env, invoiceId);
+
+  return c.json({
+    invoiceId,
+    ...auditTrail,
   });
 });
 
