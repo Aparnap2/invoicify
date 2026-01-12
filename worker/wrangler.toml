@@ -4,7 +4,7 @@ compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
 [assets]
-directory = "public"
+directory = "../fullstack/dist"
 binding = "ASSETS"
 
 [[d1_databases]]
@@ -20,5 +20,24 @@ bucket_name = "invoicify-files"
 [ai]
 binding = "AI"
 
+# Rate Limiting (Cloudflare Workers Paid feature - enable in WAF Dashboard for Free/Basic)
+# For production: Configure rate limiting rules in Cloudflare Dashboard > WAF > Rate Limiting Rules
+# Reference: https://developers.cloudflare.com/waf/rate-limiting-rules/
+
 [vars]
 ENVIRONMENT = "development"
+
+[vars.STRIPE_TEST_KEY]
+source = "env"
+
+[vars.QUICKBOOKS_CLIENT_ID]
+source = "env"
+
+[vars.QUICKBOOKS_CLIENT_SECRET]
+source = "env"
+
+[vars.QUICKBOOKS_REFRESH_TOKEN]
+source = "env"
+
+[vars.QUICKBOOKS_REALM_ID]
+source = "env"

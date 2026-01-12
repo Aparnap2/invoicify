@@ -197,3 +197,79 @@ export const payments = sqliteTable("payments", {
   executedAt: text("executed_at"),
   createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
 });
+
+/**
+ * Trust Battery - Agent Autonomy Tracking
+ *
+ * Tracks agent accuracy over time to determine autonomy level.
+ * Level 1: Review All (0-50 consecutive accurate)
+ * Level 2: Review Exceptions (50-100 consecutive accurate)
+ * Level 3: Auto-Approve (100+ consecutive accurate)
+ */
+export const trustBattery = sqliteTable("trust_battery", {
+  id: text("id").primaryKey(),
+  vendorId: text("vendor_id").notNull(), // Per-vendor trust
+  consecutiveAccurate: integer("consecutive_accurate").default(0), // Correct auto-decisions
+  consecutiveErrors: integer("consecutive_errors").default(0), // Corrections needed
+  totalDecisions: integer("total_decisions").default(0),
+  accurateDecisions: integer("accurate_decisions").default(0),
+  lastDecisionAt: text("last_decision_at").default(sql`CURRENT_TIMESTAMP`),
+  trustLevel: integer("trust_level").default(3), // 1=Probation, 2=Standard, 3=Core
+  autoApproveThreshold: real("auto_approve_threshold").default(500), // Max $ for auto-approve
+  createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at"),
+});
+
+/**
+ * Agent Decision Log - For Learning Loop
+ *
+ * Records every decision made by the agent for audit and learning.
+ */
+export const agentDecisions = sqliteTable("agent_decisions", {
+  id: text("id").primaryKey(),
+  invoiceId: text("invoice_id")
+    .notNull()
+    .references(() => invoices.id, { onDelete: "cascade" }),
+  traceId: text("trace_id").notNull(), // For correlating with audit logs
+  node: text("node").notNull(), // Which node made the decision
+  decision: text("decision").notNull(), // AUTO_APPROVE, HITL, BLOCK, etc.
+  confidence: real("confidence"),
+  reasoning: text("reasoning"), // JSON string of reasoning chain
+  signals: text("signals"), // JSON string of decision signals
+  humanIntervention: integer("human_intervention", { mode: "boolean" }).default(false),
+  humanDecision: text("human_decision"), // What human actually decided
+  humanReason: text("human_reason"), // Human's reason for override
+  outcomeVerified: integer("outcome_verified", { mode: "boolean" }).default(false),
+  outcomeCorrect: integer("outcome_correct", { mode: "boolean" }), // Did agent guess right?
+  feedbackReceived: integer("feedback_received", { mode: "boolean" }).default(false),
+  createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
+  verifiedAt: text("verified_at"),
+});
+
+/**
+ * Strategic Configuration - Company Financial Settings
+ */
+export const strategicConfig = sqliteTable("strategic_config", {
+  id: text("id").primaryKey().default("default"),
+  strategyMode: text("strategy_mode").default("OPTIMIZE"), // SURVIVAL, GROWTH, OPTIMIZE
+  payrollDate: text("payroll_date"), // Day of month (e.g., "15" or "28")
+  payrollAmount: real("payroll_amount").default(0),
+  safetyBuffer: real("safety_buffer").default(10000), // Min cash to maintain
+  autoApproveThreshold: real("auto_approve_threshold").default(500),
+  hitlThreshold: real("hitl_threshold").default(0.6), // Risk score threshold for HITL
+  createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at"),
+});
+
+/**
+ * Budget Categories - Spending Limits
+ */
+export const budgetCategories = sqliteTable("budget_categories", {
+  id: text("id").primaryKey(),
+  category: text("category").notNull(),
+  monthlyLimit: real("monthly_limit").notNull(),
+  softCapAlert: integer("soft_cap_alert", { mode: "boolean" }).default(true),
+  isActive: integer("is_active", { mode: "boolean" }).default(true),
+  createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at"),
+});

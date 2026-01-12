@@ -7,6 +7,12 @@ export type Env = {
   AI: Ai;
   INVOICE_BUCKET: R2Bucket;
   ASSETS: any;
+  // API Keys from wrangler.toml secrets/.env
+  STRIPE_TEST_KEY: string;
+  QUICKBOOKS_CLIENT_ID: string;
+  QUICKBOOKS_CLIENT_SECRET: string;
+  QUICKBOOKS_REFRESH_TOKEN: string;
+  QUICKBOOKS_REALM_ID: string;
 };
 
 export interface Ai {

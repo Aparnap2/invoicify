@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { secureHeaders } from "hono/secure-headers";
 import { getDb } from "./db";
 import { invoicesRoutes } from "./routes/invoices";
 import { extractRoutes } from "./routes/extract";
@@ -8,16 +9,21 @@ import { riskRoutes } from "./routes/risk";
 import { vendorTrustRoutes } from "./routes/vendor-trust";
 import { paymentRoutes } from "./routes/payments";
 import { workflowRoutes } from "./routes/workflow";
+import { trustBatteryRoutes, strategyRoutes } from "./routes/trust-battery";
 import { quickbooksRoutes } from "./routes/quickbooks";
 import type { Env } from "./db";
 
 const app = new Hono<{ Bindings: Env }>();
 
+// Security headers
+app.use("/*", secureHeaders());
+
 // CORS for frontend
 app.use("/*", cors({
   origin: ["http://localhost:3000", "https://invoicify.pages.dev"],
-  allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+  allowMethods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowHeaders: ["Content-Type", "Authorization"],
+  credentials: false,  // Explicitly deny credentials for security
 }));
 
 // Health check
@@ -38,6 +44,8 @@ app.route("/api/v1/risk", riskRoutes);
 app.route("/api/v1/vendor-trust", vendorTrustRoutes);
 app.route("/api/v1/payments", paymentRoutes);
 app.route("/api/v1/workflow", workflowRoutes);
+app.route("/api/v1/trust-battery", trustBatteryRoutes);
+app.route("/api/v1/strategy", strategyRoutes);
 app.route("/api/v1/quickbooks", quickbooksRoutes);
 
 // Error handling

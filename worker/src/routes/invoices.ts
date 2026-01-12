@@ -6,15 +6,62 @@ import type { Env } from "../db";
 
 const invoicesRoutes = new Hono<{ Bindings: Env }>();
 
+// ============ Validation Helpers ============
+
+function validatePagination(page?: string, limit?: string): { page: number; limit: number; error?: string } {
+  const parsedPage = parseInt(page || "1");
+  const parsedLimit = parseInt(limit || "20");
+
+  if (isNaN(parsedPage) || parsedPage < 1) {
+    return { page: 1, limit: parsedLimit, error: "Invalid page number" };
+  }
+  if (isNaN(parsedLimit) || parsedLimit < 1) {
+    return { page: parsedPage, limit: 20, error: "Invalid limit" };
+  }
+  if (parsedLimit > 100) {
+    return { page: parsedPage, limit: 100, error: "Limit capped at 100" };
+  }
+
+  return { page: parsedPage, limit: parsedLimit };
+}
+
+function validateDate(dateStr?: string): { date: string | undefined; error?: string } {
+  if (!dateStr) return { date: undefined };
+  // ISO date format validation (YYYY-MM-DD)
+  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateRegex.test(dateStr)) {
+    return { date: undefined, error: "Invalid date format (expected YYYY-MM-DD)" };
+  }
+  return { date: dateStr };
+}
+
+function sanitizeSearchQuery(query?: string): string | undefined {
+  if (!query) return undefined;
+  // Remove potentially dangerous characters for LIKE pattern
+  return query.replace(/[%$_\\]/g, "").substring(0, 100);
+}
+
 // List all invoices with pagination and filters
 invoicesRoutes.get("/", async (c) => {
   const db = getDb(c.env);
-  const page = parseInt(c.req.query("page") || "1");
-  const limit = parseInt(c.req.query("limit") || "20");
+
+  // Validate pagination
+  const { page, limit, error: pagError } = validatePagination(
+    c.req.query("page"),
+    c.req.query("limit")
+  );
+  if (pagError) {
+    return c.json({ error: pagError, code: "INVALID_PAGINATION" }, 400);
+  }
+
   const status = c.req.query("status");
-  const vendorName = c.req.query("vendor");
-  const fromDate = c.req.query("from");
-  const toDate = c.req.query("to");
+  const vendorName = sanitizeSearchQuery(c.req.query("vendor"));
+  const { date: fromDate, error: fromError } = validateDate(c.req.query("from"));
+  const { date: toDate, error: toError } = validateDate(c.req.query("to"));
+
+  if (fromError) return c.json({ error: fromError, code: "INVALID_FROM_DATE" }, 400);
+  if (toError) return c.json({ error: toError, code: "INVALID_TO_DATE" }, 400);
+
   const sortBy = c.req.query("sortBy") || "createdAt";
   const sortOrder = c.req.query("sortOrder") || "desc";
 
@@ -336,6 +383,83 @@ invoicesRoutes.get("/search", async (c) => {
     .limit(20);
 
   return c.json({ data: results });
+});
+
+// Approve/reject invoice (HITL workflow endpoint)
+// POST /api/v1/invoices/:id/approve
+invoicesRoutes.post("/:id/approve", async (c) => {
+  const db = getDb(c.env);
+  const id = c.req.param("id");
+  const body = await c.req.json<{
+    decision: "approved" | "rejected";
+    comments?: string;
+    performedBy?: string;
+  }>();
+
+  // Validate decision
+  if (!body.decision || !["approved", "rejected"].includes(body.decision)) {
+    return c.json({ error: "Invalid decision. Must be 'approved' or 'rejected'" }, 400);
+  }
+
+  // Get invoice
+  const [invoice] = await db
+    .select()
+    .from(schema.invoices)
+    .where(eq(schema.invoices.id, id))
+    .limit(1);
+
+  if (!invoice) {
+    return c.json({ error: "Invoice not found" }, 404);
+  }
+
+  const now = new Date().toISOString();
+  const newStatus = body.decision === "approved" ? "APPROVED" : "REJECTED";
+
+  // Update invoice status
+  const [updated] = await db
+    .update(schema.invoices)
+    .set({
+      status: newStatus,
+      updatedAt: now,
+    })
+    .where(eq(schema.invoices.id, id))
+    .returning();
+
+  // Create approval record
+  const approvalId = uuidv4();
+  await db.insert(schema.approvals).values({
+    id: approvalId,
+    invoiceId: id,
+    approverEmail: body.performedBy || "admin",
+    status: body.decision === "approved" ? "APPROVED" : "REJECTED",
+    comments: body.comments,
+    createdAt: now,
+  });
+
+  // Create audit log
+  await db.insert(schema.auditLogs).values({
+    id: uuidv4(),
+    action: `HITL_${body.decision.toUpperCase()}`,
+    entityType: "invoice",
+    entityId: id,
+    performedBy: body.performedBy || "human",
+    changes: JSON.stringify({
+      decision: body.decision,
+      comments: body.comments,
+      previousStatus: invoice.status,
+      newStatus,
+    }),
+    performedAt: now,
+  });
+
+  return c.json({
+    success: true,
+    data: {
+      id: updated.id,
+      status: newStatus,
+      approvalId,
+    },
+  });
 });
 
 export { invoicesRoutes };

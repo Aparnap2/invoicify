@@ -41,22 +41,25 @@ export interface QuickBooksBill {
 /**
  * QuickBooks configuration
  */
-const QB_CONFIG = {
-  clientId: "${QUICKBOOKS_CLIENT_ID}",
-  clientSecret: "${QUICKBOOKS_CLIENT_SECRET}",
-  redirectUri: "${QUICKBOOKS_REDIRECT_URI}",
-  environment: "sandbox" as const, // or "production"
-  baseUrlSandbox: "https://sandbox-quickbooks.api.intuit.com",
-  baseUrlProduction: "https://quickbooks.api.intuit.com",
-};
+export function getQuickBooksConfig(env: Env) {
+  return {
+    clientId: env.QUICKBOOKS_CLIENT_ID,
+    clientSecret: env.QUICKBOOKS_CLIENT_SECRET,
+    redirectUri: `${env.ASSETS?.url || "http://localhost:8787"}/api/v1/quickbooks/callback`,
+    environment: "sandbox" as const,
+    baseUrlSandbox: "https://sandbox-quickbooks.api.intuit.com",
+    baseUrlProduction: "https://quickbooks.api.intuit.com",
+  };
+}
 
 /**
  * Get authorization URL for QuickBooks OAuth
  */
-export function getAuthorizationUrl(state: string): string {
+export function getAuthorizationUrl(env: Env, state: string): string {
+  const config = getQuickBooksConfig(env);
   const params = new URLSearchParams({
-    client_id: QB_CONFIG.clientId,
-    redirect_uri: QB_CONFIG.redirectUri,
+    client_id: config.clientId,
+    redirect_uri: config.redirectUri,
     response_type: "code",
     scope: "com.intuit.quickbooks.accounting",
     state,
@@ -69,12 +72,14 @@ export function getAuthorizationUrl(state: string): string {
  * Exchange authorization code for tokens
  */
 export async function exchangeCodeForTokens(
+  env: Env,
   code: string
 ): Promise<QuickBooksTokens | null> {
+  const config = getQuickBooksConfig(env);
   const tokenUrl = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 
   const credentials = Buffer.from(
-    `${QB_CONFIG.clientId}:${QB_CONFIG.clientSecret}`
+    `${config.clientId}:${config.clientSecret}`
   ).toString("base64");
 
   const response = await fetch(tokenUrl, {
@@ -86,7 +91,7 @@ export async function exchangeCodeForTokens(
     body: new URLSearchParams({
       grant_type: "authorization_code",
       code,
-      redirect_uri: QB_CONFIG.redirectUri,
+      redirect_uri: config.redirectUri,
     }),
   });
 
@@ -115,12 +120,14 @@ export async function exchangeCodeForTokens(
  * Refresh access token
  */
 export async function refreshAccessToken(
+  env: Env,
   refreshToken: string
 ): Promise<QuickBooksTokens | null> {
+  const config = getQuickBooksConfig(env);
   const tokenUrl = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 
   const credentials = Buffer.from(
-    `${QB_CONFIG.clientId}:${QB_CONFIG.clientSecret}`
+    `${config.clientId}:${config.clientSecret}`
   ).toString("base64");
 
   const response = await fetch(tokenUrl, {
@@ -159,10 +166,10 @@ export async function refreshAccessToken(
 /**
  * Get base URL for API calls
  */
-function getBaseUrl(): string {
-  return QB_CONFIG.environment === "sandbox"
-    ? QB_CONFIG.baseUrlSandbox
-    : QB_CONFIG.baseUrlProduction;
+function getBaseUrl(config: ReturnType<typeof getQuickBooksConfig>): string {
+  return config.environment === "sandbox"
+    ? config.baseUrlSandbox
+    : config.baseUrlProduction;
 }
 
 /**
@@ -173,10 +180,10 @@ export class QuickBooksClient {
   private realmId: string;
   private baseUrl: string;
 
-  constructor(tokens: QuickBooksTokens) {
+  constructor(env: Env, tokens: QuickBooksTokens) {
     this.accessToken = tokens.accessToken;
-    this.realmId = tokens.realmId;
-    this.baseUrl = getBaseUrl();
+    this.realmId = tokens.realmId || env.QUICKBOOKS_REALM_ID;
+    this.baseUrl = getBaseUrl(getQuickBooksConfig(env));
   }
 
   /**
