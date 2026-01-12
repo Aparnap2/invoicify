@@ -570,55 +570,135 @@ function calculateRiskScore(inputs: RiskInputs): {
 
 ---
 
-## 8. Data Architecture
+## 8. The Context Layer (The "Founder's Memory")
 
-### A. Cloudflare D1 (Source of Truth) - Current Implementation
+This is what makes Invoicify intelligent, not just automated. It gives the agent a "temporal memory" of company context so the founder doesn't have to context-switch to explain "why this is OK (or not) this time."
 
-**Tables**
+### 8A. Temporal Knowledge Graph (Neo4j + Graphiti)
 
-* invoices
-* vendors
-* approvals
-* payments
-* audit_logs
-* agent_runs
+Graphiti is the "Hippocampus" of the agent. It stores "Episodes" of business interactions, allowing the agent to reason about changes over time.
 
-### B. pgvector (Semantic Memory)
+**Graph Model:**
 
-* Past invoices embeddings
-* Vendor behavior embeddings
-* Policy documents
-* Approval rationales
+```typescript
+// Nodes
+Vendor { id, name, category }
+Invoice { id, number, amount, status }
+Contract { id, terms, active_period }
+Policy { id, name, rules, valid_from, valid_to }
+Person { id, role, approver_level }
 
-Used for:
+// Edges (Time-Aware via Graphiti)
+(:Vendor)-[:TRUST_STATUS {level: 'PROBATION', valid_from: '2025-01-01', valid_to: '2025-02-01'}]->(:Company)
+(:Vendor)-[:TRUST_STATUS {level: 'TRUSTED', valid_from: '2025-02-02'}]->(:Company)
+(:Vendor)-[:VIOLATED_TERM {severity: 'HIGH', episode_id: 'xxx'}]->(:Contract)
+(:Invoice)-[:BELONGS_TO_EPISODE {reason: 'Series A Demo'}]->(:Episode)
+```
 
-* “Is this similar to previous invoices?”
-* “Have we seen this pattern before?”
+**Episodic Memory Examples:**
 
----
+* "Jan 1st: Founder put vendor 'Acme' on probation due to bad service"
+* "Jan 12th: Founder overrode probation to pay Acme"
+* "Last month you rejected this vendor due to quality - has this been resolved?"
 
-### C. Neo4j + Graphiti (Relational Context)
+**Query Examples:**
 
-**Graph Entities**
+```python
+# "What happened with this vendor last month?"
+results = graphiti.search(
+    "AWS overage approval history",
+    filter_by_time="last_6_months"
+)
+# Returns: "On Jan 12, Founder approved AWS overage due to 'Staging Demo'."
+```
 
-* Vendor → Invoice → Payment
-* Vendor → Contract → Terms
-* Invoice → Approval → Person
+### 8B. Semantic Memory (Postgres + pgvector)
 
-Used for:
+Stores embeddings of invoices, contracts, and approval rationales for similarity search.
 
-* Relationship reasoning
-* Risk scoring
-* Pattern discovery
+**Tables:**
 
----
+```sql
+-- Invoices with embeddings
+CREATE TABLE invoices (
+    id UUID PRIMARY KEY,
+    vendor_id UUID,
+    status TEXT,
+    embedding vector(1536),  -- OpenAI text-embedding-3-small
+    risk_score FLOAT,
+    extracted_text TEXT,
+    created_at TIMESTAMP
+);
 
-### D. Redis / Valkey
+-- Episodes (Graphiti sync)
+CREATE TABLE episodes (
+    id UUID PRIMARY KEY,
+    content TEXT,
+    embedding vector(1536),
+    timestamp TIMESTAMP,
+    vendor_id UUID,
+    invoice_id UUID
+);
+```
 
-* Agent state cache
-* HITL queues
-* Workflow locks
-* Retry handling
+**Used for:**
+
+* "Is this similar to previous invoices?"
+* "Have we seen this pattern before?"
+* Contract similarity search
+
+### 8C. Source of Truth (Postgres)
+
+```sql
+CREATE TABLE vendors (
+    id UUID PRIMARY KEY,
+    name TEXT UNIQUE,
+    category TEXT,
+    trust_level INTEGER DEFAULT 1,  -- 1=Probation, 2=Standard, 3=Core
+    auto_approve_threshold DECIMAL(10,2) DEFAULT 0,
+    consecutive_accurate INTEGER DEFAULT 0,
+    consecutive_errors INTEGER DEFAULT 0
+);
+
+CREATE TABLE invoices (
+    id UUID PRIMARY KEY,
+    vendor_id UUID,
+    invoice_number TEXT,
+    amount DECIMAL(10,2),
+    status TEXT,  -- 'RECEIVED', 'HITL', 'APPROVED', 'PAID', 'RECONCILED'
+    risk_score FLOAT,
+    analyst_proposal TEXT,
+    critic_decision TEXT,
+    stripe_payout_id TEXT,
+    qbo_bill_id TEXT,
+    policy_version_at_decision TEXT
+);
+
+CREATE TABLE payments (
+    id UUID PRIMARY KEY,
+    invoice_id UUID,
+    amount DECIMAL(10,2),
+    scheduled_date DATE,
+    stripe_payout_id TEXT,
+    status TEXT  -- 'SCHEDULED', 'CLEARED', 'RECONCILED'
+);
+
+CREATE TABLE audit_logs (
+    id UUID PRIMARY KEY,
+    episode_id UUID,
+    action TEXT,
+    rationale TEXT,
+    actor TEXT,  -- 'AGENT' or 'HUMAN'
+    timestamp TIMESTAMP
+);
+```
+
+### 8D. Redis (Agent State)
+
+* Agent state cache for workflow checkpoints
+* HITL queues with TTL
+* Idempotency keys (prevent double payments)
+* Rate limiting per vendor
 
 ---
 
@@ -704,29 +784,59 @@ Actions:
 
 ---
 
-## 10. Process Map (Textual)
+## 10. The "Context-Switching" Workflow (Process Map)
+
+When an invoice arrives, the agent builds a "Context Frame" before deciding.
 
 ```
-[Invoice Arrival]
+[INVOICE ARRIVAL]
         ↓
-[INGEST → EXTRACT → CONTEXT → RISK]
+[INGEST → EXTRACT → DEDUPE]
+        ↓
+[TIME TRAVEL STEP - Graphiti Recall]
+   Query: "What happened with this vendor last month?"
+   Returns: Recent episodes, past disputes, approval patterns
+        ↓
+[CONTEXT LOAD]
+   ├── pgvector: Similar invoices + contract terms
+   └── Neo4j: Vendor relationship over time
         ↓
 [THE AUTONOMOUS BRAIN]
-   [ANALYST] → Propose action
+   [ANALYST] → Propose action (pattern detection)
         ↓
    [CRITIC] → Safety checks (Priority Matrix)
         ↓
-[ROUTE]
-   ├─ Auto-Approve
-   ├─ HITL Review
-   └─ Escalate
+[GATE]
+   ├── Risk ≤ Threshold → Auto-Execute
+   └── Risk > Threshold → HITL Review
         ↓
-[POST_LEDGER → SCHEDULE_PAYMENT]
+[EXECUTE]
+   ├── Stripe Test Mode: Create payout
+   └── QuickBooks: Post Bill + BillPayment
         ↓
-[RECONCILE] → Match bank transaction → Mark complete
+[RECONCILE]
+   Webhook → Match payout to invoice → Update status
         ↓
-[LEARN] → Update trust battery
+[WRITE-BACK]
+   Graphiti: Add new episode ("Founder approved due to X reason")
+   Trust Battery: Update vendor trust
 ```
+
+### The "Money Shot" Demo Flow
+
+1. **Context Setup:** Manually add episode to Graphiti: "Jan 1st: Founder put vendor 'Acme' on probation due to bad service."
+
+2. **Trigger:** Send an invoice from 'Acme'.
+
+3. **Agent Action:** Agent pauses (HITL).
+
+4. **Reason:** "Vendor is on probation (Episode Jan 1st)."
+
+5. **Resolution:** Founder approves with override.
+
+6. **Execution:** System shows Stripe Payout succeeded & QBO Bill created.
+
+7. **Update:** Agent writes new episode: "Jan 12th: Founder overrode probation to pay Acme."
 
 ### Process States
 
@@ -734,6 +844,7 @@ Actions:
 |-------|-------------|
 | `NEW` | Invoice received, not yet processed |
 | `EXTRACTED` | Fields extracted with confidence score |
+| `CONTEXT_LOADED` | Graphiti/Neo4j context retrieved |
 | `VALIDATED` | Risk assessed, ready for decision |
 | `APPROVED` | Auto-approved or human-approved |
 | `PENDING` | Scheduled, waiting for payment execution |

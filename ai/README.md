@@ -1,13 +1,23 @@
 # Invoicify AI Service
 
-**Proactive Finance Ops AI Agent for Seed–Series A Startups**
+**Proactive Finance Ops AI Intern for Seed–Series A Startups**
 
 AI-powered invoice extraction and processing service built with:
 - **FastAPI** - Web framework
 - **Pydantic v2** - Data validation
 - **LangGraph** - Workflow orchestration with Analyst-Critic pattern
+- **Graphiti + Neo4j** - Temporal Knowledge Graph for episodic memory
+- **Postgres + pgvector** - Semantic memory for similarity search
 - **Ollama** - Local LLM support (OpenAI-compatible API)
-- **Neo4j** - Knowledge graph for vendor relationships
+
+## Core Philosophy
+
+The Founder has "episodic memory" (what happened when). Invoicify has it too.
+
+The agent stores "Episodes" of business interactions, allowing it to reason about changes over time:
+
+* "We tolerated late payments from Agency X last year because they were new, but now we're strict."
+* "This vendor is owned by my investor's brother, so we always pay early."
 
 ## Core Architecture
 
@@ -34,12 +44,41 @@ Gradual agent autonomy based on demonstrated accuracy:
 | 2 (Standard) | 50-100 | $500 |
 | 3 (Core) | 100+ | $5,000 |
 
+### Temporal Knowledge Graph (Graphiti + Neo4j)
+The "Hippocampus" of the agent. Stores evolving relationships over time:
+
+```typescript
+// Time-aware edges via Graphiti
+(:Vendor)-[:TRUST_STATUS {level: 'PROBATION', valid_from: '2025-01-01', valid_to: '2025-02-01'}]->(:Company)
+(:Vendor)-[:TRUST_STATUS {level: 'TRUSTED', valid_from: '2025-02-02'}]->(:Company)
+(:Vendor)-[:VIOLATED_TERM {severity: 'HIGH'}]->(:Contract)
+```
+
+**Episodic Memory:**
+* "Jan 1st: Founder put vendor 'Acme' on probation due to bad service"
+* "Jan 12th: Founder overrode probation to pay Acme"
+* "Last month you rejected this vendor due to quality - has this been resolved?"
+
 ### Cash Reconciliation
 Fuzzy matching between bank transactions and scheduled payments:
 - Amount similarity scoring (50% weight)
 - Vendor similarity matching (30% weight)
 - Date proximity scoring (20% weight)
 - Confidence threshold: 0.8
+
+## The "Money Shot" Demo Flow
+
+1. **Context Setup:** Add episode to Graphiti: "Jan 1st: Founder put vendor 'Acme' on probation due to bad service."
+
+2. **Trigger:** Send an invoice from 'Acme'.
+
+3. **Agent Action:** Agent pauses (HITL). Reason: "Vendor is on probation (Episode Jan 1st)."
+
+4. **Resolution:** Founder approves with override.
+
+5. **Execution:** Stripe Payout succeeded & QBO Bill created.
+
+6. **Update:** Agent writes new episode: "Jan 12th: Founder overrode probation to pay Acme."
 
 ## Components
 
@@ -50,7 +89,8 @@ app/
 │   └── critic.py       # Safety checks with Priority Matrix
 ├── clients/
 │   ├── ollama_client.py # LLM & embeddings via OpenAI SDK
-│   └── neo4j_client.py  # Knowledge graph operations
+│   ├── neo4j_client.py  # Knowledge graph operations
+│   └── graphiti_client.py # Temporal Knowledge Graph (planned)
 ├── services/
 │   ├── trust_battery.py    # Vendor trust tracking
 │   └── reconciliation.py   # Cash reconciliation
@@ -111,6 +151,7 @@ uv run fastapi dev
 | `NEO4J_URI` | Neo4j connection | `neo4j://localhost:7687` |
 | `NEO4J_USER` | Neo4j username | `neo4j` |
 | `NEO4J_PASSWORD` | Neo4j password | `password` |
+| `POSTGRES_URI` | Postgres connection | `postgresql://localhost:5432` |
 | `HOST` | Server host | `0.0.0.0` |
 | `PORT` | Server port | `8001` |
 | `DEBUG` | Debug mode | `false` |
@@ -131,6 +172,10 @@ Required services (run individually):
 ```bash
 # Neo4j
 docker run -d --name neo4j -p 7687:7687 -p 7474:7474 neo4j:latest
+
+# PostgreSQL (for pgvector)
+docker run -d --name postgres -p 5432:5432 -e POSTGRES_PASSWORD=password postgres:15
+# Enable pgvector: docker exec -it postgres psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 # Ollama
 docker run -d --name ollama -p 11434:11434 ollama/ollama
