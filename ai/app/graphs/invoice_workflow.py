@@ -1,17 +1,21 @@
-"""LangGraph workflow for invoice processing."""
+"""LangGraph workflow for invoice processing with Analyst-Critic pattern."""
 
 import logging
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, TypedDict
+from typing import Annotated, Optional, TypedDict
 from uuid import uuid4
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
 
+from app.agents.analyst import AnalystAgent, AnalystProposal, get_analyst_agent
+from app.agents.critic import CriticAgent, CriticReview, FinancialContext, get_critic_agent
 from app.agents.extractor import get_extractor_agent, InvoiceExtractionResult
+from app.clients.neo4j_client import get_neo4j_client
 from app.config import get_settings
+from app.services.trust_battery import TrustBatteryService, get_trust_battery_service
 from app.schemas.invoice import (
     InvoiceCreate,
     InvoiceExtracted,
@@ -29,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 class InvoiceState(TypedDict):
-    """State for the invoice processing graph."""
+    """State for the invoice processing graph with Analyst-Critic pattern."""
 
     # Input
     invoice_data: InvoiceCreate
@@ -45,6 +49,13 @@ class InvoiceState(TypedDict):
     po_validation: POValidationResult | None
     duplicate_check: DuplicateCheck | None
 
+    # Analyst-Critic pattern
+    financial_context: dict | None  # Current cash, burn rate, runway, etc.
+    analyst_proposal: AnalystProposal | None  # Analyst's recommendation
+    critic_review: CriticReview | None  # Critic's safety review
+    trust_battery: dict | None  # Vendor trust level and history
+    reasoning_chain: list[str] | None  # Step-by-step reasoning
+
     # Approval state
     requires_approval: bool
     approval_request: ApprovalRequest | None
@@ -56,7 +67,7 @@ class InvoiceState(TypedDict):
 
 
 def create_invoice_workflow() -> StateGraph:
-    """Create the invoice processing workflow graph."""
+    """Create the invoice processing workflow graph with Analyst-Critic pattern."""
 
     builder = StateGraph(InvoiceState)
 
@@ -64,6 +75,14 @@ def create_invoice_workflow() -> StateGraph:
     builder.add_node("extract_fields", extract_fields_node)
     builder.add_node("validate_po", validate_po_node)
     builder.add_node("check_duplicates", check_duplicates_node)
+
+    # Analyst-Critic pattern nodes
+    builder.add_node("load_context", load_context_node)  # Load financial context + trust battery
+    builder.add_node("analyst_propose", analyst_propose_node)  # Analyst makes recommendation
+    builder.add_node("critic_review", critic_review_node)  # Critic does safety checks
+    builder.add_node("execute_action", execute_action_node)  # Execute proposed action
+
+    # Legacy escalation nodes (fallback)
     builder.add_node("decide_escalation", decide_escalation_node)
     builder.add_node("request_approval", request_approval_node)
     builder.add_node("process_approval", process_approval_node)
@@ -73,31 +92,317 @@ def create_invoice_workflow() -> StateGraph:
     # Set entry point
     builder.set_entry_point("extract_fields")
 
-    # Flow: extract -> validate -> duplicate -> escalation -> (approval | finalize)
+    # Core flow: extract -> validate -> duplicate
     builder.add_edge("extract_fields", "validate_po")
     builder.add_edge("validate_po", "check_duplicates")
-    builder.add_edge("check_duplicates", "decide_escalation")
+    builder.add_edge("check_duplicates", "load_context")
 
-    # Conditional: based on escalation decision
+    # Analyst-Critic pattern
+    builder.add_edge("load_context", "analyst_propose")
+    builder.add_edge("analyst_propose", "critic_review")
+
+    # Conditional: based on Critic's decision
     builder.add_conditional_edges(
-        "decide_escalation",
-        should_approve,
+        "critic_review",
+        route_action,
         {
-            "approve": "request_approval",
-            "finalize": "finalize",
+            "auto_approve": "finalize",
+            "hitl_required": "request_approval",
+            "delay_payment": "finalize",  # Mark as delayed
+            "reject": "finalize",  # Mark as rejected
             "exception": "handle_exception",
         },
     )
 
-    # Approval flow
+    # Legacy approval flow (for HITL cases)
     builder.add_edge("request_approval", "process_approval")
     builder.add_edge("process_approval", "finalize")
+
+    # Execute action node before finalize (for special actions)
+    builder.add_edge("execute_action", "finalize")
 
     # Finalization
     builder.add_edge("finalize", END)
     builder.add_edge("handle_exception", END)
 
     return builder
+
+
+def route_action(state: InvoiceState) -> str:
+    """Route based on Critic's review and Analyst's proposal."""
+
+    critic = state.get("critic_review")
+    analyst = state.get("analyst_proposal")
+
+    if not critic:
+        return "exception"
+
+    # Priority 1: If Critic blocked, reject
+    if critic.blocked:
+        logger.info(f"Invoice {state.get('invoice_id')} blocked by Critic: {critic.block_reason}")
+        return "reject"
+
+    # Priority 2: If Analyst recommended HITL, go to approval
+    if analyst and analyst.proposed_action == "HITL_REQUIRED":
+        return "hitl_required"
+
+    # Priority 3: If Analyst recommended delay, mark as delayed
+    if analyst and analyst.proposed_action == "DELAY_PAYMENT":
+        return "delay_payment"
+
+    # Priority 4: If Analyst recommended reject
+    if analyst and analyst.proposed_action == "REJECT":
+        return "reject"
+
+    # Priority 5: If Critic says proceed and auto-approve eligible
+    if critic.can_proceed:
+        signals = [s for s in critic.signals if s.type == "TRUST"]
+        for signal in signals:
+            if signal.severity == "INFO":
+                return "auto_approve"
+
+    # Default: HITL required
+    return "hitl_required"
+
+
+async def load_context_node(state: InvoiceState) -> InvoiceState:
+    """Load financial context and vendor trust battery."""
+    logger.info(f"Loading context for invoice {state.get('invoice_id')}")
+
+    settings = get_settings()
+    extracted = state.get("extracted_data")
+
+    if not extracted:
+        return {**state, "error": "No extracted data for context loading"}
+
+    # Build financial context
+    financial_context = FinancialContext(
+        current_cash=50000.0,  # In production, fetch from DB/API
+        monthly_burn_rate=15000.0,  # In production, calculate from historical data
+        runway_days=100.0,
+        payroll_date="15",  # 15th of month
+        payroll_amount=25000.0,
+        safety_buffer=settings.safety_buffer,
+        strategy_mode=settings.strategy_mode,
+        auto_approve_threshold=1000.0,
+        budgets={"Software": 5000.0, "Infrastructure": 10000.0, "Services": 3000.0},
+        category_limits={"Software": 8000.0, "Infrastructure": 15000.0, "Services": 5000.0},
+    )
+
+    # Get vendor trust battery from Neo4j or service
+    trust_service = get_trust_battery_service()
+    vendor_name = extracted.vendor_name
+
+    trust_info = {
+        "vendor_name": vendor_name,
+        "trust_level": 2,  # Default to STANDARD
+        "total_decisions": 0,
+        "auto_approved_count": 0,
+        "manual_review_count": 0,
+        "success_rate": 1.0,
+    }
+
+    try:
+        trust_level = await trust_service.get_vendor_trust(vendor_name)
+        trust_info["trust_level"] = trust_level.value
+        trust_info["total_decisions"] = 10  # Mock data
+        trust_info["auto_approved_count"] = 8
+        trust_info["manual_review_count"] = 2
+        trust_info["success_rate"] = 0.95
+    except Exception as e:
+        logger.warning(f"Could not load trust battery for {vendor_name}: {e}")
+
+    # Build reasoning chain
+    reasoning_chain = [
+        f"[{datetime.now().isoformat()}] Loaded financial context: cash=${financial_context.current_cash:.0f}, runway={financial_context.runway_days:.0f} days",
+        f"[{datetime.now().isoformat()}] Loaded trust battery for {vendor_name}: Level {trust_info['trust_level']}",
+        f"[{datetime.now().isoformat()}] Strategy mode: {financial_context.strategy_mode}",
+    ]
+
+    return {
+        **state,
+        "status": InvoiceStatus.VALIDATING,
+        "financial_context": financial_context.model_dump(),
+        "trust_battery": trust_info,
+        "reasoning_chain": reasoning_chain,
+    }
+
+
+async def analyst_propose_node(state: InvoiceState) -> InvoiceState:
+    """Analyst node: Pattern detection and proposal generation."""
+    logger.info(f"Analyst proposing action for invoice {state.get('invoice_id')}")
+
+    extracted = state.get("extracted_data")
+    financial_context_dict = state.get("financial_context")
+    trust_info = state.get("trust_battery")
+    reasoning_chain = state.get("reasoning_chain", [])
+
+    if not extracted:
+        return {**state, "error": "No extracted data for analyst"}
+
+    # Build FinancialContext from dict
+    if financial_context_dict:
+        financial_context = FinancialContext(**financial_context_dict)
+    else:
+        settings = get_settings()
+        financial_context = FinancialContext()
+
+    # Get trust level
+    from app.services.trust_battery import TrustLevel
+    trust_level = TrustLevel(trust_info.get("trust_level", 2))
+
+    try:
+        analyst = get_analyst_agent()
+        proposal = await analyst.analyze(
+            invoice_data=extracted,
+            financial_context=financial_context,
+            trust_level=trust_level,
+            trust_threshold=1000.0,  # From settings
+        )
+
+        # Update reasoning chain
+        reasoning_chain.append(f"[{datetime.now().isoformat()}] Analyst detected {len(proposal.anomalies)} anomaly(ies)")
+        for anomaly in proposal.anomalies:
+            reasoning_chain.append(f"  - {anomaly}")
+        reasoning_chain.append(f"[{datetime.now().isoformat()}] Analyst proposal: {proposal.proposed_action.value}")
+        reasoning_chain.append(f"  - Confidence: {proposal.confidence:.0%}")
+        reasoning_chain.append(f"  - Reasoning: {proposal.reasoning}")
+
+        return {
+            **state,
+            "status": InvoiceStatus.VALIDATING,
+            "analyst_proposal": proposal,
+            "reasoning_chain": reasoning_chain,
+        }
+
+    except Exception as e:
+        logger.error(f"Analyst error: {e}")
+        reasoning_chain.append(f"[{datetime.now().isoformat()}] Analyst error: {str(e)}")
+        return {
+            **state,
+            "error": f"Analyst failed: {str(e)}",
+            "reasoning_chain": reasoning_chain,
+        }
+
+
+async def critic_review_node(state: InvoiceState) -> InvoiceState:
+    """Critic node: Safety checks using Priority Matrix."""
+    logger.info(f"Critic reviewing invoice {state.get('invoice_id')}")
+
+    extracted = state.get("extracted_data")
+    financial_context_dict = state.get("financial_context")
+    analyst_proposal = state.get("analyst_proposal")
+    trust_info = state.get("trust_battery")
+    reasoning_chain = state.get("reasoning_chain", [])
+
+    if not extracted:
+        return {**state, "error": "No extracted data for critic"}
+
+    # Build FinancialContext from dict
+    if financial_context_dict:
+        financial_context = FinancialContext(**financial_context_dict)
+    else:
+        financial_context = FinancialContext()
+
+    # Get trust level
+    trust_level = trust_info.get("trust_level", 2)
+    settings = get_settings()
+
+    try:
+        critic = get_critic_agent()
+        review = await critic.review(
+            invoice_data=extracted,
+            financial_context=financial_context,
+            trust_level=trust_level,
+            trust_threshold=1000.0,
+        )
+
+        # Update reasoning chain
+        reasoning_chain.append(f"[{datetime.now().isoformat()}] Critic safety check results:")
+        for signal in review.signals:
+            reasoning_chain.append(f"  - [{signal.type}] {signal.severity}: {signal.message}")
+            reasoning_chain.append(f"    -> {signal.recommendation}")
+        reasoning_chain.append(f"[{datetime.now().isoformat()}] Critic decision: {'PROCEED' if review.can_proceed else 'BLOCKED'}")
+        reasoning_chain.append(f"  - Risk score: {review.risk_score:.0%}")
+
+        return {
+            **state,
+            "status": InvoiceStatus.VALIDATING,
+            "critic_review": review,
+            "reasoning_chain": reasoning_chain,
+        }
+
+    except Exception as e:
+        logger.error(f"Critic error: {e}")
+        reasoning_chain.append(f"[{datetime.now().isoformat()}] Critic error: {str(e)}")
+        return {
+            **state,
+            "error": f"Critic failed: {str(e)}",
+            "reasoning_chain": reasoning_chain,
+        }
+
+
+async def execute_action_node(state: InvoiceState) -> InvoiceState:
+    """Execute the approved action (update Neo4j, trust battery, etc.)."""
+    logger.info(f"Executing action for invoice {state.get('invoice_id')}")
+
+    analyst_proposal = state.get("analyst_proposal")
+    critic_review = state.get("critic_review")
+    extracted = state.get("extracted_data")
+    reasoning_chain = state.get("reasoning_chain", [])
+
+    if not analyst_proposal or not extracted:
+        return {**state, "error": "No proposal or extracted data"}
+
+    action = analyst_proposal.proposed_action
+
+    # Update vendor trust battery based on outcome
+    try:
+        trust_service = get_trust_battery_service()
+        neo4j_client = get_neo4j_client()
+
+        if action == "AUTO_APPROVE":
+            await trust_service.record_decision(
+                vendor_name=extracted.vendor_name,
+                decision="APPROVED",
+                was_auto_approved=True,
+            )
+            reasoning_chain.append(f"[{datetime.now().isoformat()}] Updated trust battery for {extracted.vendor_name}: +1 auto-approve")
+        elif action == "HITL_REQUIRED":
+            await trust_service.record_decision(
+                vendor_name=extracted.vendor_name,
+                decision="PENDING_REVIEW",
+                was_auto_approved=False,
+            )
+            reasoning_chain.append(f"[{datetime.now().isoformat()}] Updated trust battery for {extracted.vendor_name}: marked for manual review")
+        elif action == "DELAY_PAYMENT":
+            reasoning_chain.append(f"[{datetime.now().isoformat()}] Payment delayed for {extracted.vendor_name}: {analyst_proposal.reasoning}")
+        elif action == "REJECT":
+            await trust_service.record_decision(
+                vendor_name=extracted.vendor_name,
+                decision="REJECTED",
+                was_auto_approved=False,
+            )
+            reasoning_chain.append(f"[{datetime.now().isoformat()}] Updated trust battery for {extracted.vendor_name}: rejection recorded")
+
+        # Create invoice record in Neo4j
+        await neo4j_client.create_invoice(
+            invoice_id=str(state["invoice_id"]),
+            vendor_name=extracted.vendor_name,
+            amount=float(extracted.total_amount),
+            status=action.value,
+            due_date=str(extracted.due_date),
+        )
+        reasoning_chain.append(f"[{datetime.now().isoformat()}] Created invoice record in knowledge graph")
+
+    except Exception as e:
+        logger.warning(f"Could not update trust/Neo4j: {e}")
+        reasoning_chain.append(f"[{datetime.now().isoformat()}] Warning: Could not update trust/Neo4j: {str(e)}")
+
+    return {
+        **state,
+        "reasoning_chain": reasoning_chain,
+    }
 
 
 def should_approve(state: InvoiceState) -> str:
@@ -418,9 +723,17 @@ class InvoiceWorkflow:
             "raw_text": "",
             "po_validation": None,
             "duplicate_check": None,
+            # Analyst-Critic pattern state
+            "financial_context": None,
+            "analyst_proposal": None,
+            "critic_review": None,
+            "trust_battery": None,
+            "reasoning_chain": None,
+            # Approval state
             "requires_approval": False,
             "approval_request": None,
             "approval_action": None,
+            # Output
             "result": None,
             "error": None,
         }
