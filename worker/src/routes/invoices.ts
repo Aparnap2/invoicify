@@ -112,6 +112,30 @@ invoicesRoutes.get("/", async (c) => {
   });
 });
 
+// Search invoices (MUST be before /:id to avoid route conflict)
+invoicesRoutes.get("/search", async (c) => {
+  const db = getDb(c.env);
+  const query = sanitizeSearchQuery(c.req.query("q"));
+
+  if (!query || query.length < 2) {
+    return c.json({ error: "Search query must be at least 2 characters", code: "INVALID_QUERY" }, 400);
+  }
+
+  const results = await db
+    .select()
+    .from(schema.invoices)
+    .where(
+      or(
+        like(schema.invoices.vendorName, `%${query}%`),
+        like(schema.invoices.invoiceNumber, `%${query}%`),
+        like(schema.invoices.rawContent, `%${query}%`)
+      )
+    )
+    .limit(20);
+
+  return c.json({ data: results, count: results.length });
+});
+
 // Get single invoice by ID
 invoicesRoutes.get("/:id", async (c) => {
   const db = getDb(c.env);
@@ -359,30 +383,6 @@ invoicesRoutes.get("/stats/overview", async (c) => {
     totals: totalAmount,
     recentActivity,
   });
-});
-
-// Search invoices
-invoicesRoutes.get("/search", async (c) => {
-  const db = getDb(c.env);
-  const query = c.req.query("q");
-
-  if (!query || query.length < 2) {
-    return c.json({ error: "Search query must be at least 2 characters" }, 400);
-  }
-
-  const results = await db
-    .select()
-    .from(schema.invoices)
-    .where(
-      or(
-        like(schema.invoices.vendorName, `%${query}%`),
-        like(schema.invoices.invoiceNumber, `%${query}%`),
-        like(schema.invoices.rawContent, `%${query}%`)
-      )
-    )
-    .limit(20);
-
-  return c.json({ data: results });
 });
 
 // Approve/reject invoice (HITL workflow endpoint)
