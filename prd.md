@@ -1437,4 +1437,303 @@ With these consolidated upgrades, it is a **Finance Ops Intern**.
 4. **Build HITL UI**
 5. **Only then optimize**
 
+---
+
+# APPENDIX A: IMPLEMENTATION-SPECIFIC ADDENDUM
+
+> This section addresses gaps identified during live build for production deployment.
+
+---
+
+## 1. Day 0 Bootstrap Module
+
+The PRD assumes the agent "learns over time" via Trust Battery and Calibration Reports, but does not specify **how to seed initial intelligence** so the agent isn't "dumb" on Day 1.
+
+### Bootstrap Requirements
+
+On first install, the system **MUST** ingest historical data to achieve functional baseline:
+
+| Data Source | Target Table | Minimum Seeding |
+|-------------|--------------|-----------------|
+| **Last 6 months bills/payments** | `vendors` | 50+ vendor records |
+| **Historical payment patterns** | `episodes` (Graphiti) | 100+ decision records |
+| **Past invoice embeddings** | `pgvector` | 200+ invoice vectors |
+
+### Bootstrap Methods (Priority Order)
+
+1. **QuickBooks Online API Import**
+   ```typescript
+   // Fetch last 6 months of bills
+   await qbClient.queryBills({
+     txnDate: { $gte: "2024-07-01" },
+     MAXRESULTS: 500
+   });
+   ```
+
+2. **CSV Upload Fallback**
+   ```typescript
+   interface BootstrapCSV {
+     vendorName: string;
+     invoiceNumber: string;
+     amount: number;
+     dueDate: string;
+     paidDate?: string;
+     status: "paid" | "pending" | "rejected";
+   }
+   ```
+
+3. **Manual Entry** (for Phase 1 MVP)
+   - Allow founders to manually add top 5 vendors
+   - Trust Battery starts at Level 2 (Standard) for manually-verified vendors
+
+### Bootstrap Validation
+
+After seeding, run `POST /api/v1/bootstrap/verify`:
+- Returns: `{ vendorsSeeded: number, episodesSeeded: number, embeddingsSeeded: number }`
+- Fails deployment if thresholds not met
+
+---
+
+## 2. Execution Layer Specification
+
+**Current PRD Ambiguity:** The "Banking" row lists "Mercury API / Plaid" but this portfolio build uses **Stripe + QuickBooks Online**.
+
+### Corrected Tech Stack Table
+
+| Module | Technical Choice | Reason |
+| :--- | :--- | :--- |
+| **Orchestration** | **LangGraph** | Required for Analyst-Critic loop and state persistence |
+| **Memory** | **pgvector** (via Neon/Supabase) | Stores invoice "fingerprints" for semantic matching |
+| **Banking / Payments** | **Stripe Connect (Test Mode)** | Simulates payment processing for portfolio build |
+| **Ledger / Accounting** | **QuickBooks Online API** | Authoritative source for vendor data, bills, payments |
+| **Safety** | **Idempotency Keys** | Every payment request uses hash-based keys |
+| **Agent Runtime** | **Cloudflare Workers** | Serverless edge for low latency |
+| **Database** | **D1 (SQLite)** + **Neon (Postgres/pgvector)** | Hybrid: transactional + vector search |
+| **OCR** | **Cloudflare Workers AI (Llama 3.2 Vision)** | On-device document extraction |
+| **Learning** | **Trust Battery** | Gradual autonomy based on accuracy |
+| **Knowledge Graph** | **Graphiti** (self-hosted or cloud) | Episodic memory for vendor relationships |
+
+### Stripe Configuration
+
+```typescript
+// worker/wrangler.toml
+[vars.STRIPE_TEST_KEY]
+source = "env"
+
+[vars.STRIPE_WEBHOOK_SECRET]
+source = "secret"  # wrangler secret put STRIPE_WEBHOOK_SECRET
+```
+
+### QuickBooks Configuration
+
+```typescript
+// worker/wrangler.toml
+[vars.QUICKBOOKS_CLIENT_ID]
+source = "env"
+
+[vars.QUICKBOOKS_CLIENT_SECRET]
+source = "secret"  # wrangler secret put QUICKBOOKS_CLIENT_SECRET
+
+[vars.QUICKBOOKS_REFRESH_TOKEN]
+source = "secret"
+
+[vars.QUICKBOOKS_REALM_ID]
+source = "env"
+```
+
+---
+
+## 3. Continuous Ingestion Pipeline
+
+The PRD mentions "Email Ingestion" and "Bank Feed" as separate triggers, but requires a **unified write-back loop** to keep the Knowledge Graph synchronized.
+
+### Pipeline Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    CONTINUOUS INGESTION PIPELINE                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐     │
+│  │   INVOICE   │───▶│   EXTRACT   │───▶│   RISK ASSESSMENT   │     │
+│  │   ARRIVES   │    │   (Vision)  │    │                     │     │
+│  └─────────────┘    └─────────────┘    └──────────┬──────────┘     │
+│                                                    │                 │
+│                         ┌──────────────────────────┘                 │
+│                         │                                           │
+│                         ▼                                           │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │                    WRITE-BACK LOOP                          │   │
+│  ├─────────────────────────────────────────────────────────────┤   │
+│  │                                                             │   │
+│  │  ┌─────────────────────────────────────────────────────┐   │   │
+│  │  │ WRITE 1: pgvector Embeddings                        │   │   │
+│  │  │ Every invoice → extracted_text embedding            │   │   │
+│  │  │ Purpose: Semantic search, duplicate detection       │   │   │
+│  │  └─────────────────────────────────────────────────────┘   │   │
+│  │                                                             │   │
+│  │  ┌─────────────────────────────────────────────────────┐   │   │
+│  │  │ WRITE 2: Graphiti Episodes                          │   │   │
+│  │  │ Every human decision → new episode record           │   │   │
+│  │  │ Purpose: Learn from approvals/rejections            │   │   │
+│  │  └─────────────────────────────────────────────────────┘   │   │
+│  │                                                             │   │
+│  │  ┌─────────────────────────────────────────────────────┐   │   │
+│  │  │ WRITE 3: Vendor Trust Stats                         │   │   │
+│  │  │ Every reconciled payment → update trust battery     │   │   │
+│  │  │ Purpose: Auto-approve thresholds update             │   │   │
+│  │  └─────────────────────────────────────────────────────┘   │   │
+│  │                                                             │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Implementation Details
+
+#### Write 1: pgvector Embeddings
+
+```typescript
+// worker/src/routes/extract.ts
+await extractRoutes.post("/complete", async (c) => {
+  const { invoiceId, extractedText } = await c.req.json();
+
+  // Generate embedding
+  const embedding = await env.AI.run("@cf/baai/bge-en-15", {
+    text: extractedText,
+  });
+
+  // Store in pgvector (via Neon/Supabase)
+  await db.insert(schema.invoiceEmbeddings).values({
+    invoiceId,
+    embedding,
+    createdAt: new Date().toISOString(),
+  });
+});
+```
+
+#### Write 2: Graphiti Episodes
+
+```typescript
+// worker/src/lib/audit-tracer.ts
+export async function logDecision(
+  env: Env,
+  invoiceId: string,
+  decision: "approved" | "rejected" | "delayed",
+  reasoning: string
+) {
+  // Write episode to Graphiti
+  await graphitiClient.createEpisode({
+    type: "HUMAN_DECISION",
+    entities: [invoiceId],
+    observations: [
+      {
+        type: "decision",
+        value: decision,
+        source: "human_reviewer",
+        reasoning,
+      },
+    ],
+  });
+}
+```
+
+#### Write 3: Trust Battery Update
+
+```typescript
+// worker/src/lib/trust-battery.ts
+export async function recordDecision(
+  env: Env,
+  vendorId: string,
+  outcome: "accurate" | "inaccurate"
+) {
+  const db = getDb(env);
+
+  // Update trust battery
+  await db.insert(schema.trustHistory).values({
+    vendorId,
+    decision: outcome,
+    timestamp: new Date().toISOString(),
+  });
+
+  // Recalculate level
+  await recalculateVendorTrust(db, vendorId);
+}
+```
+
+### Pipeline Performance Requirements
+
+| Metric | Target | How Achieved |
+|--------|--------|--------------|
+| **Embedding Latency** | < 500ms | Cloudflare Workers AI |
+| **Episode Write Latency** | < 200ms | Graphiti async write |
+| **Trust Update Latency** | < 100ms | D1 transaction |
+| **End-to-End Pipeline** | < 2s | Parallel writes |
+
+---
+
+## 4. API Contract Summary
+
+### Core Endpoints (v1)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check |
+| `POST` | `/api/v1/invoices` | Create invoice |
+| `GET` | `/api/v1/invoices` | List with pagination |
+| `GET` | `/api/v1/invoices/:id` | Get details |
+| `GET` | `/api/v1/invoices/search?q=` | Search |
+| `POST` | `/api/v1/invoices/:id/approve` | HITL approve |
+| `POST` | `/api/v1/workflow/start` | Start processing |
+| `GET` | `/api/v1/risk/:invoiceId` | Get risk score |
+| `POST` | `/api/v1/quickbooks/auth` | OAuth URL |
+
+### Response Standards
+
+```typescript
+interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: {
+    code: string;
+    message: string;
+  };
+  pagination?: {
+    page: number;
+    limit: number;
+    total: number;
+  };
+}
+```
+
+---
+
+## 5. Security Boundaries
+
+| Boundary | Implementation |
+|----------|----------------|
+| **Auth** | API key validation (Phase 2) |
+| **Rate Limiting** | Cloudflare WAF rules |
+| **Input Validation** | Zod schemas on all POST/PUT |
+| **SQL Injection** | Drizzle ORM parameterization |
+| **XSS** | secureHeaders() middleware |
+| **CORS** | Explicit origin allowlist |
+
+---
+
+## 6. Deployment Checklist
+
+- [ ] D1 database created and migrated
+- [ ] R2 bucket provisioned
+- [ ] Environment secrets set via `wrangler secret put`
+- [ ] Frontend built (`pnpm build`)
+- [ ] Assets served from Worker (`ASSETS` binding)
+- [ ] Rate limiting rules configured in Cloudflare WAF
+- [ ] QuickBooks OAuth flow tested
+- [ ] Bootstrap data seeded (50+ vendors, 100+ episodes)
+
+---
+
+*End of Addendum*
+
 
