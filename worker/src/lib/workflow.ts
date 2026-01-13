@@ -1042,11 +1042,17 @@ export async function executeWorkflowStep(
     [WorkflowNodes.RISK]: nodeAssessRisk,
     [WorkflowNodes.ANALYST]: nodeAnalyst,
     [WorkflowNodes.CRITIC]: nodeCritic,
+    [WorkflowNodes.ROUTE]: nodeCritic, // Route uses critic logic
     [WorkflowNodes.AUTO_APPROVE]: nodeAutoApprove,
     [WorkflowNodes.HUMAN_REVIEW]: nodeHumanReview,
     [WorkflowNodes.POST_LEDGER]: nodePostLedger,
     [WorkflowNodes.LEARN]: nodeLearnFromOutcome,
   };
+
+  // END node - workflow complete
+  if (currentState.currentNode === WorkflowNodes.END) {
+    return { ...currentState, success: true } as WorkflowState;
+  }
 
   const handler = nodeHandlers[currentState.currentNode];
   if (!handler) {
@@ -1072,6 +1078,11 @@ export async function runWorkflow(
   initialState: WorkflowState
 ): Promise<WorkflowState> {
   let state = initialState;
+
+  // Handle START node - transition immediately to INGEST
+  if (state.currentNode === WorkflowNodes.START) {
+    state = { ...state, currentNode: WorkflowNodes.INGEST };
+  }
 
   // Pre-fetch financial context for the workflow
   if (!state.financialContext) {

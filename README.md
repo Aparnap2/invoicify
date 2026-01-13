@@ -1,6 +1,6 @@
 # Invoicify AI
 
-Vertical AI Agent for Finance Operations - Automated invoice processing with Analyst-Critic pattern, Trust Battery system, and HITL (Human-in-the-Loop) review.
+Vertical AI Agent for Finance Operations - Automated invoice processing with Analyst-Critic pattern, Trust Battery system, and Slack "Intern's Desk" interface.
 
 ## Architecture
 
@@ -15,11 +15,16 @@ Vertical AI Agent for Finance Operations - Automated invoice processing with Ana
 │  ┌──────▼──────┐  ┌─────────────┐  ┌─────────────────────────┐  │
 │  │ Cloudflare  │  │   Workers   │  │     Vision OCR AI       │  │
 │  │   AI (Llama)│  │    KV       │  │    (Extraction)         │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
+│  └──────┬──────┘  └──────┬──────┘  └───────────┬─────────────┘  │
+│         │                │                      │                │
+│  ┌──────▼───────────────────────┐  ┌───────────▼─────────────┐  │
+│  │      Neo4j Knowledge Graph   │  │   Slack "Intern's Desk"  │  │
+│  │    (Temporal Vendor Data)    │  │   (Conversational AI)    │  │
+│  └──────────────────────────────┘  └─────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
-         │
-         │ API (REST)
-         ▼
+         │                                                       │
+         │ API (REST)                        │ Slack Events      │
+         ▼                                                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Vite + React SPA                            │
 │  ┌───────────┐  ┌────────────┐  ┌───────────────────────────┐  │
@@ -48,15 +53,54 @@ Vertical AI Agent for Finance Operations - Automated invoice processing with Ana
 - **Risk Assessment** - Multi-factor fraud detection
 - **Auto-Approve** - Low-risk invoices auto-approved based on Trust Battery
 
+### Analyst-Critic Agent Pattern
+- **Analyst Node** - Proposes action based on historical patterns and vendor history
+- **Critic Node** - Safety checks with priority matrix (RUNWAY > STRATEGY > CONTRACT > TRUST > BUDGET)
+- **Reasoning Chain** - Every decision explained with confidence scores
+
 ### Human-in-the-Loop (HITL)
 - High-risk invoices flagged for review
 - Approve/reject with comments
 - Audit trail for all decisions
+- Slack integration with interactive buttons
 
 ### Trust Battery System
 - Tracks vendor trust over time
 - Auto-approve thresholds per vendor level
 - Levels: Probation → Standard → Core
+
+### Slack "Intern's Desk" Interface
+Conversational AI that lives in Slack - no dashboard required.
+
+**Proactive Alerts (The "Tap on the Shoulder"):**
+```
+@finance-intern blocked a $12k invoice from NewVendor.
+It looks like a duplicate of one we paid last week.
+[Approve Override] [Reject]
+```
+
+**Conversational Queries (The "Shout Across the Room"):**
+```
+Founder: "How much runway do we have?"
+Intern:  "Current cash $450k. Burn ~$50k/mo. Runway: ~9 months.
+         (Note: We have a large tax bill due next month.)"
+
+Founder: "Did we pay Acme yet?"
+Intern:  "Yes! $2,450 on Jan 10. It was auto-approved because
+         Acme is a Core vendor with 100% accuracy."
+```
+
+**Episode Creation (Memory Injection):**
+```
+Founder: "@finance-intern, from now on, auto-approve Vercel invoices under $500"
+Intern:  "Understood. I've updated the Vercel trust policy and
+         logged this instruction to my memory."
+```
+
+### Temporal Knowledge Graph (Neo4j)
+- Vendor invoice history as temporal relationships
+- Trust score evolution over time
+- Pattern detection for recurring invoices
 
 ## Getting Started
 
@@ -150,6 +194,26 @@ npx wrangler deploy
 | POST | `/api/v1/workflow/start` | Start invoice processing |
 | POST | `/api/v1/workflow/:id/approve` | Continue after HITL |
 
+### Slack Intern ("The Intern's Desk")
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/v1/slack/intern/command` | Slash command `/intern` handler |
+| POST | `/api/v1/slack/intern/events` | Event subscriptions (app_mention) |
+| POST | `/api/v1/slack/interactions` | Button click interactions |
+
+**Supported Queries:**
+- `"How much runway do we have?"` - Returns runway calculation with context
+- `"What's our burn rate?"` - Monthly spending breakdown
+- `"How much cash do we have?"` - Current cash balance
+- `"How much did we pay to [Vendor]?"` - Vendor spend history
+- `"What's pending?"` - List of pending invoices
+- `"Help"` - Show available commands
+
+**Supported Instructions:**
+- `"From now on, auto-approve [Vendor] under $500"` - Trust policy
+- `"Always flag [Vendor] for review"` - Review rule
+
 ### QuickBooks
 
 | Method | Endpoint | Description |
@@ -189,17 +253,26 @@ invoicify/
 ├── worker/                # Cloudflare Worker (Hono)
 │   ├── src/
 │   │   ├── routes/       # API endpoints
+│   │   │   ├── slack.ts  # Slack Intern & HITL
+│   │   │   ├── workflow.ts # Agent workflow
+│   │   │   └── ...
 │   │   ├── lib/          # Business logic
-│   │   ├── db/           # D1 schema
-│   │   └── lib/          # Audit tracer, QuickBooks
+│   │   │   ├── slack-intern.ts  # "Intern's Desk" logic
+│   │   │   ├── slack.ts         # HITL messages
+│   │   │   ├── workflow.ts      # State machine
+│   │   │   ├── neo4j.ts         # Knowledge graph
+│   │   │   └── audit-tracer.ts  # Audit trail
+│   │   └── db/           # D1 schema
 │   ├── drizzle/          # DB migrations
-│   └── wrangler.toml     # Worker config
+│   ├── wrangler.toml     # Worker config
+│   └── slack-manifest.json # Slack App Manifest
 ├── fullstack/            # React SPA (Vite)
 │   ├── src/
 │   │   ├── components/   # React components
 │   │   ├── hooks/        # Custom hooks
 │   │   └── types/        # TypeScript types
 │   └── dist/             # Built assets
+├── prd.md                # Product Requirements Document
 └── SECURITY_AUDIT_REPORT.md
 ```
 
