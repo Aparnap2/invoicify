@@ -3,41 +3,73 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Production deployment settings
+minify = true
+logpush = true
+
+# Memory and CPU limits
+limits = { cpu_ms = 100, memory_mb = 128 }
+
 [assets]
 directory = "../fullstack/dist"
 binding = "ASSETS"
+cache_control = { browse_cache_max_age_seconds = 86400, stale_while_revalidate = 60 }
 
+# D1 Database
 [[d1_databases]]
 binding = "DB"
 database_name = "invoicify-db"
 database_id = "${CLOUDFLARE_DATABASE_ID}"
 migrations_dir = "drizzle/migrations"
 
+# R2 Storage for invoice files
 [[r2_buckets]]
 binding = "INVOICE_BUCKET"
 bucket_name = "invoicify-files"
 
+# Workers AI
 [ai]
 binding = "AI"
 
-# Rate Limiting (Cloudflare Workers Paid feature - enable in WAF Dashboard for Free/Basic)
-# For production: Configure rate limiting rules in Cloudflare Dashboard > WAF > Rate Limiting Rules
-# Reference: https://developers.cloudflare.com/waf/rate-limiting-rules/
+# KV for caching and sessions
+[[kv_namespaces]]
+binding = "CACHE"
+id = "${CLOUDFLARE_KV_CACHE_ID}"
+preview_id = ""
+
+# Production secrets (set via: npx wrangler secret put SECRET_NAME)
+# Do NOT commit secrets to version control
+[secrets]
+# STRIPE_TEST_KEY
+# QUICKBOOKS_CLIENT_ID
+# QUICKBOOKS_CLIENT_SECRET
+# QUICKBOOKS_REFRESH_TOKEN
+# QUICKBOOKS_REALM_ID
+# SLACK_BOT_TOKEN
+# SLACK_SIGNING_SECRET
+# NEO4J_URI
+# NEO4J_USER
+# NEO4J_PASSWORD
+# API_SECRET_KEY
 
 [vars]
-ENVIRONMENT = "development"
+ENVIRONMENT = "production"
+LOG_LEVEL = "info"
 
-[vars.STRIPE_TEST_KEY]
-source = "env"
+# Custom builds for optimization
+[build]
+command = "pnpm esbuild"
 
-[vars.QUICKBOOKS_CLIENT_ID]
-source = "env"
+# Workers Sites (if using Pages instead of direct dist)
+# [sites]
+# directory = "../fullstack/dist"
 
-[vars.QUICKBOOKS_CLIENT_SECRET]
-source = "env"
+# Experimental features (enable as needed)
+[experimental]
+# d1_shims = true  # Enable for better D1 debugging
 
-[vars.QUICKBOOKS_REFRESH_TOKEN]
-source = "env"
-
-[vars.QUICKBOOKS_REALM_ID]
-source = "env"
+# Service bindings (for future AI service split)
+# [[services]]
+# binding = "AI_SERVICE"
+# service = "invoicify-ai"
+# environment = "production"
