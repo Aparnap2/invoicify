@@ -6,8 +6,10 @@ AI-powered invoice extraction and processing service built with:
 - **FastAPI** - Web framework
 - **Pydantic v2** - Data validation
 - **LangGraph** - Workflow orchestration with Analyst-Critic pattern
+- **Langfuse** - Observability for LLM workflows
 - **Graphiti + Neo4j** - Temporal Knowledge Graph for episodic memory
 - **Postgres + pgvector** - Semantic memory for similarity search
+- **Qdrant** - Vector database for semantic search
 - **Ollama** - Local LLM support (OpenAI-compatible API)
 
 ## Core Philosophy
@@ -66,6 +68,35 @@ Fuzzy matching between bank transactions and scheduled payments:
 - Date proximity scoring (20% weight)
 - Confidence threshold: 0.8
 
+### Observability (Langfuse)
+Full tracing for invoice processing workflows:
+
+```python
+from app.services.langfuse import get_langfuse_client, InvoiceWorkflowTracer
+
+# Tracing is automatic in workflow nodes
+# Manual tracing for custom operations:
+await InvoiceWorkflowTracer.trace_extraction(
+    invoice_id="inv_123",
+    raw_content="...",
+    extracted_data={"vendor": "Acme", "amount": 500},
+    duration_ms=1450.5,
+)
+
+await InvoiceWorkflowTracer.trace_workflow_completion(
+    invoice_id="inv_123",
+    workflow_id="thread_abc",
+    final_status="approved",
+    duration_ms=2500.0,
+)
+```
+
+Traced events:
+- Workflow execution start/completion
+- Field extraction with duration and confidence
+- Analyst-Critic reasoning chains
+- LLM generation prompts and responses
+
 ## The "Money Shot" Demo Flow
 
 1. **Context Setup:** Add episode to Graphiti: "Jan 1st: Founder put vendor 'Acme' on probation due to bad service."
@@ -92,8 +123,10 @@ app/
 │   ├── neo4j_client.py  # Knowledge graph operations
 │   └── graphiti_client.py # Temporal Knowledge Graph (planned)
 ├── services/
-│   ├── trust_battery.py    # Vendor trust tracking
-│   └── reconciliation.py   # Cash reconciliation
+│   ├── langfuse.py        # Observability tracing
+│   ├── trust_battery.py   # Vendor trust tracking
+│   ├── reconciliation.py  # Cash reconciliation
+│   └── qdrant.py          # Vector search for semantic search
 ├── graphs/
 │   └── invoice_workflow.py # LangGraph StateGraph
 └── schemas/
@@ -148,10 +181,14 @@ uv run fastapi dev
 | `OLLAMA_BASE_URL` | Ollama server URL | `http://localhost:11434` |
 | `LLM_MODEL` | Ollama model name | `ollama/llama3.2-vision` |
 | `EMBEDDING_MODEL` | Embedding model | `ollama/nomic-embed-text` |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse public key | `None` |
+| `LANGFUSE_SECRET_KEY` | Langfuse secret key | `None` |
+| `LANGFUSE_HOST` | Langfuse server URL | `https://cloud.langfuse.com` |
 | `NEO4J_URI` | Neo4j connection | `neo4j://localhost:7687` |
 | `NEO4J_USER` | Neo4j username | `neo4j` |
 | `NEO4J_PASSWORD` | Neo4j password | `password` |
 | `POSTGRES_URI` | Postgres connection | `postgresql://localhost:5432` |
+| `QDRANT_URL` | Qdrant server URL | `http://localhost:6333` |
 | `HOST` | Server host | `0.0.0.0` |
 | `PORT` | Server port | `8001` |
 | `DEBUG` | Debug mode | `false` |
@@ -177,8 +214,20 @@ docker run -d --name neo4j -p 7687:7687 -p 7474:7474 neo4j:latest
 docker run -d --name postgres -p 5432:5432 -e POSTGRES_PASSWORD=password postgres:15
 # Enable pgvector: docker exec -it postgres psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
+# Qdrant (Vector Database)
+docker run -d --name qdrant -p 6333:6333 qdrant/qdrant
+
+# Langfuse (Observability - optional, cloud hosted or self-hosted)
+# Cloud: Sign up at https://cloud.langfuse.com
+# Self-hosted: docker run -d --name langfuse -p 3000:3000 langfuse/langfuse
+
 # Ollama
 docker run -d --name ollama -p 11434:11434 ollama/ollama
 docker exec ollama ollama pull llama3.2-vision
 docker exec ollama ollama pull nomic-embed-text
+```
+
+Or use the MDS docker-compose for all services:
+```bash
+docker-compose -f docker-compose.mds.yml up -d
 ```
