@@ -50,6 +50,11 @@ class Settings(BaseSettings):
         description="Postgres URL for LangGraph state persistence"
     )
 
+    # Langfuse Observability
+    langfuse_public_key: Optional[str] = Field(default=None, description="Langfuse public key")
+    langfuse_secret_key: Optional[str] = Field(default=None, description="Langfuse secret key")
+    langfuse_host: Optional[str] = Field(default=None, description="Langfuse server URL")
+
     # Logging
     log_level: str = Field(default="INFO")
 

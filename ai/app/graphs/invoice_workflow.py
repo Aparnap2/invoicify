@@ -15,6 +15,11 @@ from app.agents.critic import CriticAgent, CriticReview, FinancialContext, get_c
 from app.agents.extractor import get_extractor_agent, InvoiceExtractionResult
 from app.clients.neo4j_client import get_neo4j_client
 from app.config import get_settings
+from app.services.langfuse import (
+    get_langfuse_client,
+    InvoiceWorkflowTracer,
+    create_workflow_trace,
+)
 from app.services.trust_battery import TrustBatteryService, get_trust_battery_service
 from app.schemas.invoice import (
     InvoiceCreate,
@@ -435,13 +440,26 @@ def should_approve(state: InvoiceState) -> str:
 
 async def extract_fields_node(state: InvoiceState) -> InvoiceState:
     """Extract fields from raw invoice content."""
-    logger.info(f"Extracting fields for invoice {state.get('invoice_id')}")
+    invoice_id = state.get("invoice_id")
+    logger.info(f"Extracting fields for invoice {invoice_id}")
+
+    start_time = time.time()
 
     try:
         extractor = get_extractor_agent()
         result = await extractor.extract_from_text(state["raw_content"])
 
+        duration_ms = (time.time() - start_time) * 1000
+
         if result.success and result.data:
+            # Trace the extraction
+            await InvoiceWorkflowTracer.trace_extraction(
+                invoice_id=invoice_id,
+                raw_content=state["raw_content"][:500],  # Truncate for tracing
+                extracted_data=result.data.model_dump(),
+                duration_ms=duration_ms,
+            )
+
             return {
                 **state,
                 "status": InvoiceStatus.EXTRACTED,
@@ -710,14 +728,18 @@ class InvoiceWorkflow:
         thread_id: str | None = None,
     ) -> ProcessingResult:
         """Process an invoice through the workflow."""
+        import time
+
         import uuid
 
         thread_id = thread_id or str(uuid.uuid4())
+        invoice_id = str(uuid4())
+        workflow_start = time.time()
 
         initial_state: InvoiceState = {
             "invoice_data": invoice_data,
             "raw_content": raw_content,
-            "invoice_id": str(uuid4()),
+            "invoice_id": invoice_id,
             "status": InvoiceStatus.NEW,
             "extracted_data": None,
             "raw_text": "",
@@ -740,19 +762,53 @@ class InvoiceWorkflow:
 
         config = {"configurable": {"thread_id": thread_id}}
 
+        # Start workflow trace
+        trace = create_workflow_trace(
+            invoice_id=invoice_id,
+            input_data={
+                "vendor": invoice_data.vendor_name,
+                "amount": str(invoice_data.total_amount),
+                "thread_id": thread_id,
+            },
+        )
+
         try:
             result = await self.graph.ainvoke(initial_state, config=config)
+            duration_ms = (time.time() - workflow_start) * 1000
+
+            # Trace workflow completion
+            await InvoiceWorkflowTracer.trace_workflow_completion(
+                invoice_id=invoice_id,
+                workflow_id=thread_id,
+                final_status=result.get("status", InvoiceStatus.EXCEPTION).value,
+                duration_ms=duration_ms,
+            )
+
+            trace.end(output={"status": result.get("status")})
+
             return result.get("result") or ProcessingResult(
-                invoice_id=initial_state["invoice_id"],
+                invoice_id=invoice_id,
                 status=InvoiceStatus.EXCEPTION,
                 extraction=None,
                 requires_approval=False,
                 error_message=result.get("error", "Unknown error"),
             )
         except Exception as e:
+            duration_ms = (time.time() - workflow_start) * 1000
             logger.error(f"Workflow error: {e}")
+
+            # Trace error
+            await InvoiceWorkflowTracer.trace_workflow_completion(
+                invoice_id=invoice_id,
+                workflow_id=thread_id,
+                final_status="error",
+                duration_ms=duration_ms,
+            )
+
+            trace.end(output={"error": str(e)})
+
             return ProcessingResult(
-                invoice_id=initial_state["invoice_id"],
+                invoice_id=invoice_id,
                 status=InvoiceStatus.EXCEPTION,
                 extraction=None,
                 requires_approval=False,

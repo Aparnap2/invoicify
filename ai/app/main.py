@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.config import get_settings
+from app.services.langfuse import get_langfuse_client
 
 # Configure logging
 logging.basicConfig(
@@ -23,6 +24,14 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info(f"Starting AI service with model: {settings.llm_model}")
     logger.info(f"Debug mode: {settings.is_development}")
+
+    # Initialize Langfuse observability
+    langfuse = get_langfuse_client()
+    if langfuse.is_enabled():
+        logger.info("Langfuse observability enabled")
+    else:
+        logger.info("Langfuse observability disabled (no credentials)")
+
     yield
     logger.info("Shutting down AI service")
 
