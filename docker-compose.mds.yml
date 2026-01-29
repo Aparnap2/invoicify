@@ -1,0 +1,138 @@
+# Modern Data/AI Stack - Docker Compose
+#
+# IMPORTANT: Ollama runs separately on host
+# Start with: docker run -d -v ollama:/root/.ollama -p 11434:11434 --name ollama ollama/ollama
+# Access at: http://localhost:11434
+#
+# Existing services configured below
+
+services:
+  # ==========================================================================
+  # Redpanda - Kafka-compatible event streaming
+  # ==========================================================================
+  redpanda:
+    image: redpandadata/redpanda
+    container_name: invoicify-redpanda
+    command: redpanda start --overprovisioned --smp 1 --memory 512M
+    ports:
+      - "9092:9092"  # Kafka protocol
+      - "8082:8082"  # Pandaproxy HTTP API
+    volumes:
+      - redpanda_data:/var/lib/redpanda
+    networks:
+      - invoicify-network
+
+  # Redpanda Console - Web UI for topic management
+  redpanda-console:
+    image: redpandadata/console:latest
+    container_name: invoicify-redpanda-console
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+      - CONNECTORS_ENABLED=true
+    depends_on:
+      - redpanda
+    networks:
+      - invoicify-network
+
+  # ==========================================================================
+  # Qdrant - Vector database for semantic search
+  # ==========================================================================
+  qdrant:
+    image: qdrant/qdrant:v1.12
+    container_name: invoicify-qdrant
+    ports:
+      - "6333:6333"  # REST API
+      - "6334:6334"  # gRPC API
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/dashboard"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - invoicify-network
+
+  # ==========================================================================
+  # Langfuse - LLM Observability
+  # ==========================================================================
+  langfuse-web:
+    image: langfuse/langfuse:v3
+    container_name: invoicify-langfuse
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/langfuse
+      - REDIS_URL=redis://redis:6379
+      - NEXTAUTH_SECRET=your-secret-change-in-production
+      - NEXTAUTH_URL=http://localhost:3000
+      - SERVER_URL=http://localhost:3000
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - invoicify-network
+
+  langfuse-worker:
+    image: langfuse/langfuse:v3
+    container_name: invoicify-langfuse-worker
+    command: ["yarn", "start:worker"]
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/langfuse
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - invoicify-network
+
+  # ==========================================================================
+  # PostgreSQL - For Langfuse database
+  # ==========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: invoicify-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=langfuse
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - invoicify-network
+
+  # ==========================================================================
+  # Redis - For Langfuse caching
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: invoicify-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - invoicify-network
+
+# ==========================================================================
+# Volumes
+# ==========================================================================
+volumes:
+  redpanda_data:
+  qdrant_data:
+  postgres_data:
+  redis_data:
+
+# ==========================================================================
+# Networks
+# ==========================================================================
+networks:
+  invoicify-network:
+    driver: bridge

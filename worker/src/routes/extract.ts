@@ -1,8 +1,10 @@
 import { Hono } from "hono";
 import { getDb, schema } from "../db";
 import { extractInvoiceWithVision, type ExtractedInvoiceData } from "../lib/vision-ocr";
+import { validateExtraction, generateValidationReport, type ValidationSignal } from "../lib/critic";
 import { eq } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
+import { publishInvoiceExtracted, publishInvoiceRiskScored } from "../lib/redpanda";
 import type { Env } from "../db";
 
 const extractRoutes = new Hono<{ Bindings: Env }>();
@@ -38,6 +40,41 @@ extractRoutes.post("/", async (c) => {
   const id = uuidv4();
   const now = new Date().toISOString();
   const extracted = result.data!;
+
+  // ================================================================
+  // CRITIC VALIDATION - Hard math validation (deterministic)
+  // ================================================================
+  const criticResult = validateExtraction({
+    vendorName: extracted.vendorName,
+    invoiceNumber: extracted.invoiceNumber,
+    invoiceDate: extracted.invoiceDate,
+    dueDate: extracted.dueDate,
+    totalAmount: extracted.totalAmount,
+    subtotal: extracted.subtotal,
+    tax: extracted.tax,
+    lineItems: extracted.lineItems,
+    currency: extracted.currency,
+  });
+
+  // Store validation signals in the database
+  if (criticResult.signals.length > 0) {
+    await db.insert(schema.riskIndicators).values(
+      criticResult.signals.map((signal) => ({
+        id: uuidv4(),
+        invoiceId: id,
+        indicatorType: signal.type,
+        severity: signal.severity.toLowerCase() as "low" | "medium" | "high" | "critical",
+        description: signal.description,
+        scoreContribution: signal.scoreContribution,
+        metadata: JSON.stringify({
+          field: signal.field,
+          expected: signal.expected,
+          actual: signal.actual,
+        }),
+        createdAt: now,
+      }))
+    );
+  }
 
   // Create checksum for duplicate detection
   const checksum = await generateChecksum(extracted);
@@ -109,6 +146,22 @@ extractRoutes.post("/", async (c) => {
     createdAt: now,
   });
 
+  // Publish event to Redpanda - invoice extracted successfully
+  const tenantId = "default"; // TODO: Get from auth context
+  const traceId = uuidv4();
+
+  await publishInvoiceExtracted(
+    id,
+    tenantId,
+    traceId,
+    extracted.vendorName,
+    extracted.invoiceNumber,
+    extracted.totalAmount,
+    extracted.currency || "USD"
+  ).catch((err) => {
+    console.error("Failed to publish extraction event:", err);
+  });
+
   // Create audit log
   await db.insert(schema.auditLogs).values({
     id: uuidv4(),
@@ -136,6 +189,18 @@ extractRoutes.post("/", async (c) => {
       dueDate: extracted.dueDate,
       lineItems: extracted.lineItems,
       confidence: result.confidence,
+    },
+    // Critic validation results
+    critic: {
+      valid: criticResult.valid,
+      errors: criticResult.errors,
+      signals: criticResult.signals.map(s => ({
+        type: s.type,
+        severity: s.severity,
+        description: s.description,
+        scoreContribution: s.scoreContribution,
+      })),
+      report: generateValidationReport(criticResult),
     },
     confidence: result.confidence,
     processingTime: result.processingTime,
