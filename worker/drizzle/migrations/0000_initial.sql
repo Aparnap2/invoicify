@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS `invoices` (
   `confidence_score` REAL,
   `risk_score` REAL,
   `risk_level` TEXT,
+  `rejection_reason` TEXT,
+  `rejection_severity` TEXT,
   `file_url` TEXT,
   `file_name` TEXT,
   `mime_type` TEXT,
@@ -126,3 +128,79 @@ CREATE INDEX IF NOT EXISTS `idx_approvals_invoice` ON `approvals`(`invoice_id`);
 CREATE INDEX IF NOT EXISTS `idx_audit_logs_entity` ON `audit_logs`(`entity_type`, `entity_id`);
 CREATE INDEX IF NOT EXISTS `idx_risk_indicators_invoice` ON `risk_indicators`(`invoice_id`);
 CREATE INDEX IF NOT EXISTS `idx_sync_queue_status` ON `sync_queue`(`status`);
+
+-- Create trust_battery table
+CREATE TABLE IF NOT EXISTS `trust_battery` (
+  `id` TEXT NOT NULL PRIMARY KEY,
+  `vendor_id` TEXT NOT NULL REFERENCES `vendors`(`id`) ON DELETE CASCADE,
+  `consecutive_accurate` INTEGER DEFAULT 0,
+  `consecutive_errors` INTEGER DEFAULT 0,
+  `total_decisions` INTEGER DEFAULT 0,
+  `accurate_decisions` INTEGER DEFAULT 0,
+  `last_decision_at` TEXT DEFAULT CURRENT_TIMESTAMP,
+  `trust_level` INTEGER DEFAULT 3,
+  `auto_approve_threshold` REAL DEFAULT 500,
+  `created_at` TEXT DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TEXT
+);
+
+-- Create agent_decisions table
+CREATE TABLE IF NOT EXISTS `agent_decisions` (
+  `id` TEXT NOT NULL PRIMARY KEY,
+  `invoice_id` TEXT NOT NULL REFERENCES `invoices`(`id`) ON DELETE CASCADE,
+  `trace_id` TEXT NOT NULL,
+  `node` TEXT NOT NULL,
+  `decision` TEXT NOT NULL,
+  `confidence` REAL,
+  `reasoning` TEXT,
+  `signals` TEXT,
+  `human_intervention` INTEGER DEFAULT 0,
+  `human_decision` TEXT,
+  `human_reason` TEXT,
+  `outcome_verified` INTEGER DEFAULT 0,
+  `outcome_correct` INTEGER,
+  `feedback_received` INTEGER DEFAULT 0,
+  `created_at` TEXT DEFAULT CURRENT_TIMESTAMP,
+  `verified_at` TEXT
+);
+
+-- Create strategic_config table
+CREATE TABLE IF NOT EXISTS `strategic_config` (
+  `id` TEXT NOT NULL PRIMARY KEY DEFAULT 'default',
+  `strategy_mode` TEXT DEFAULT 'OPTIMIZE',
+  `payroll_date` TEXT,
+  `payroll_amount` REAL DEFAULT 0,
+  `safety_buffer` REAL DEFAULT 10000,
+  `auto_approve_threshold` REAL DEFAULT 500,
+  `hitl_threshold` REAL DEFAULT 0.6,
+  `created_at` TEXT DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TEXT
+);
+
+-- Create budget_categories table
+CREATE TABLE IF NOT EXISTS `budget_categories` (
+  `id` TEXT NOT NULL PRIMARY KEY,
+  `category` TEXT NOT NULL,
+  `monthly_limit` REAL NOT NULL,
+  `soft_cap_alert` INTEGER DEFAULT 1,
+  `is_active` INTEGER DEFAULT 1,
+  `created_at` TEXT DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TEXT
+);
+
+-- Additional indexes
+CREATE INDEX IF NOT EXISTS `idx_trust_battery_vendor` ON `trust_battery`(`vendor_id`);
+CREATE INDEX IF NOT EXISTS `idx_agent_decisions_invoice` ON `agent_decisions`(`invoice_id`);
+CREATE INDEX IF NOT EXISTS `idx_agent_decisions_trace` ON `agent_decisions`(`trace_id`);
+
+-- Create payments table
+CREATE TABLE IF NOT EXISTS `payments` (
+  `id` TEXT NOT NULL PRIMARY KEY,
+  `invoice_id` TEXT NOT NULL REFERENCES `invoices`(`id`) ON DELETE CASCADE,
+  `scheduled_date` TEXT NOT NULL,
+  `amount` REAL NOT NULL DEFAULT 0,
+  `status` TEXT NOT NULL DEFAULT 'scheduled',
+  `executed_at` TEXT,
+  `created_at` TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
