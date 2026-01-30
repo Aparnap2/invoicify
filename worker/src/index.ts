@@ -11,6 +11,9 @@ import { paymentRoutes } from "./routes/payments";
 import { workflowRoutes } from "./routes/workflow";
 import { trustBatteryRoutes, strategyRoutes } from "./routes/trust-battery";
 import { quickbooksRoutes } from "./routes/quickbooks";
+import { slackRoutes } from "./routes/slack";
+import { seedRoutes } from "./routes/seed";
+import { evalRoutes } from "./routes/eval";
 import type { Env } from "./db";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -47,6 +50,24 @@ app.route("/api/v1/workflow", workflowRoutes);
 app.route("/api/v1/trust-battery", trustBatteryRoutes);
 app.route("/api/v1/strategy", strategyRoutes);
 app.route("/api/v1/quickbooks", quickbooksRoutes);
+app.route("/api/v1/slack", slackRoutes);
+app.route("/api/v1/seed", seedRoutes);
+app.route("/api/v1/eval", evalRoutes);
+
+// Middleware to block seed/eval routes in production
+app.use("/api/v1/seed/*", async (c, next) => {
+  if (c.env?.ENVIRONMENT === "production") {
+    return c.json({ error: "Not available in production" }, 404);
+  }
+  return next();
+});
+
+app.use("/api/v1/eval/*", async (c, next) => {
+  if (c.env?.ENVIRONMENT === "production") {
+    return c.json({ error: "Not available in production" }, 404);
+  }
+  return next();
+});
 
 // Error handling
 app.onError((err, c) => {
