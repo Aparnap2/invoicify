@@ -10,6 +10,7 @@ import {
   fileExistsInR2,
   type UploadResult,
 } from "../lib/r2-storage";
+import { publishInvoiceUploaded } from "../lib/kafka-producer";
 import { eq } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 import type { Env } from "../db";
@@ -92,6 +93,30 @@ uploadRoutes.post("/", async (c) => {
     performedAt: new Date().toISOString(),
   });
 
+  // Publish event to Kafka for async AI processing
+  const traceId = body.traceId || crypto.randomUUID();
+  const kafkaResult = await publishInvoiceUploaded(
+    invoiceId,
+    body.userId || "unknown",
+    key,
+    fileName,
+    mimeType,
+    binary.length,
+    checksum,
+    traceId,
+    {
+      publicUrl: uploadResult.url,
+      originalName: body.fileName,
+    }
+  );
+
+  console.log(`[upload] File uploaded, Kafka publish result:`, {
+    invoiceId,
+    topic: kafkaResult.topic,
+    success: kafkaResult.success,
+    offset: kafkaResult.offset,
+  });
+
   return c.json({
     success: true,
     data: {
@@ -101,6 +126,11 @@ uploadRoutes.post("/", async (c) => {
       mimeType,
       size: binary.length,
       checksum,
+    },
+    kafka: {
+      published: kafkaResult.success,
+      topic: kafkaResult.topic,
+      traceId,
     },
   });
 });
