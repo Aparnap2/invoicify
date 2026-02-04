@@ -14,7 +14,7 @@ import {
   type InvoiceProcessedEvent,
 } from "../../src/lib/kafka-producer";
 
-// Mock console methods for testing
+// Mock console methods for testing (logger uses console.log internally)
 const mockConsoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
 const mockConsoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
@@ -23,21 +23,78 @@ describe("KafkaProducer", () => {
     resetKafkaProducer();
     mockConsoleLog.mockClear();
     mockConsoleError.mockClear();
+    vi.clearAllMocks();
   });
 
   describe("Constructor", () => {
-    it("should initialize in mock mode when url is 'mock'", () => {
+    it("should initialize in mock mode when url is 'mock' (backwards compatibility)", () => {
       const producer = new KafkaProducer({ url: "mock" });
       expect(producer.isConfigured()).toBe(false);
     });
 
-    it("should initialize in real mode when url is provided", () => {
+    it("should initialize in mock mode with explicit mockMode flag", () => {
+      const producer = new KafkaProducer({ mockMode: true });
+      expect(producer.isConfigured()).toBe(false);
+    });
+
+    it("should initialize in mock mode via environment variable", () => {
+      vi.stubEnv("KAFKA_MOCK_MODE", "true");
+      const producer = new KafkaProducer({
+        url: "https://test.upstash.io",
+        username: "test",
+        password: "test",
+      });
+      expect(producer.isConfigured()).toBe(false);
+      vi.unstubAllEnvs();
+    });
+
+    it("should initialize in real mode when credentials are provided", () => {
       const producer = new KafkaProducer({
         url: "https://test.upstash.io",
         username: "test",
         password: "test",
       });
       expect(producer.isConfigured()).toBe(true);
+    });
+
+    it("should throw error when URL is missing", () => {
+      expect(() => {
+        new KafkaProducer({
+          url: "",
+          username: "test",
+          password: "test",
+        });
+      }).toThrow("Missing environment variables");
+    });
+
+    it("should throw error when username is missing", () => {
+      expect(() => {
+        new KafkaProducer({
+          url: "https://test.upstash.io",
+          username: "",
+          password: "test",
+        });
+      }).toThrow("Missing environment variables");
+    });
+
+    it("should throw error when password is missing", () => {
+      expect(() => {
+        new KafkaProducer({
+          url: "https://test.upstash.io",
+          username: "test",
+          password: "",
+        });
+      }).toThrow("Missing environment variables");
+    });
+
+    it("should throw error when all credentials are missing", () => {
+      expect(() => {
+        new KafkaProducer({
+          url: "",
+          username: "",
+          password: "",
+        });
+      }).toThrow("UPSTASH_KAFKA_REST_URL, UPSTASH_KAFKA_REST_USERNAME, UPSTASH_KAFKA_REST_PASSWORD");
     });
   });
 
@@ -62,7 +119,7 @@ describe("KafkaProducer", () => {
       expect(result.success).toBe(true);
       expect(result.topic).toBe("invoice.uploaded");
       expect(result.partition).toBe(0);
-      expect(result.offset).toBeGreaterThanOrEqual(0);
+      expect(result.offset).toBe(1); // Deterministic offset
     });
 
     it("should include metadata in event", async () => {
@@ -85,6 +142,42 @@ describe("KafkaProducer", () => {
 
       expect(result.success).toBe(true);
       expect(result.topic).toBe("invoice.uploaded");
+      expect(result.offset).toBe(1); // Deterministic offset
+    });
+
+    it("should have deterministic offset across calls", async () => {
+      const producer = new KafkaProducer({ url: "mock" });
+
+      const event1: InvoiceUploadedEvent = {
+        invoiceId: "inv-001",
+        userId: "user-001",
+        fileKey: "invoices/inv-001.pdf",
+        fileName: "invoice-001.pdf",
+        mimeType: "application/pdf",
+        fileSize: 1024,
+        checksum: "checksum1",
+        traceId: "trace-001",
+        timestamp: new Date().toISOString(),
+      };
+
+      const event2: InvoiceUploadedEvent = {
+        invoiceId: "inv-002",
+        userId: "user-001",
+        fileKey: "invoices/inv-002.pdf",
+        fileName: "invoice-002.pdf",
+        mimeType: "application/pdf",
+        fileSize: 2048,
+        checksum: "checksum2",
+        traceId: "trace-002",
+        timestamp: new Date().toISOString(),
+      };
+
+      const result1 = await producer.publishInvoiceUploaded(event1);
+      const result2 = await producer.publishInvoiceUploaded(event2);
+
+      // Both should have the same deterministic offset (1)
+      expect(result1.offset).toBe(1);
+      expect(result2.offset).toBe(1);
     });
   });
 
@@ -107,6 +200,7 @@ describe("KafkaProducer", () => {
       expect(result.success).toBe(true);
       expect(result.topic).toBe("invoice.processed");
       expect(result.partition).toBe(0);
+      expect(result.offset).toBe(1); // Deterministic offset
     });
 
     it("should publish failed event with error in mock mode", async () => {
@@ -126,6 +220,48 @@ describe("KafkaProducer", () => {
 
       expect(result.success).toBe(true);
       expect(result.topic).toBe("invoice.processed");
+      expect(result.offset).toBe(1); // Deterministic offset
+    });
+  });
+
+  describe("Dead Letter Queue (DLQ)", () => {
+    it("should publish to DLQ topic in mock mode", async () => {
+      const producer = new KafkaProducer({ url: "mock" });
+
+      const result = await producer.publishToDLQ(
+        "invoice.uploaded",
+        { invoiceId: "inv-001", traceId: "trace-001" },
+        "Test error"
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.topic).toBe("invoice.uploaded.dlq");
+      expect(result.partition).toBe(0);
+      expect(result.offset).toBe(-1); // Special offset for DLQ
+    });
+
+    it("should append .dlq to topic name", async () => {
+      const producer = new KafkaProducer({ url: "mock" });
+
+      const result = await producer.publishToDLQ(
+        "custom.topic",
+        { invoiceId: "inv-001" },
+        "Error"
+      );
+
+      expect(result.topic).toBe("custom.topic.dlq");
+    });
+
+    it("should not append .dlq if already present", async () => {
+      const producer = new KafkaProducer({ url: "mock" });
+
+      const result = await producer.publishToDLQ(
+        "invoice.uploaded.dlq",
+        { invoiceId: "inv-001" },
+        "Error"
+      );
+
+      expect(result.topic).toBe("invoice.uploaded.dlq");
     });
   });
 
@@ -133,15 +269,14 @@ describe("KafkaProducer", () => {
     it("should publish to any topic in mock mode", async () => {
       const producer = new KafkaProducer({ url: "mock" });
 
-      const result = await producer.publish(
-        "custom.topic",
-        "key-001",
-        { foo: "bar" }
-      );
+      const result = await producer.publish("custom.topic", "key-001", {
+        foo: "bar",
+      });
 
       expect(result.success).toBe(true);
       expect(result.topic).toBe("custom.topic");
       expect(result.partition).toBe(0);
+      expect(result.offset).toBe(1); // Deterministic offset
     });
   });
 
@@ -164,10 +299,6 @@ describe("KafkaProducer", () => {
 });
 
 describe("Convenience Functions (Mock Mode)", () => {
-  // These tests use the KafkaProducer class directly with mock mode
-  // The convenience functions (publishInvoiceUploaded, publishInvoiceProcessed)
-  // require environment variables to be set before module load
-
   describe("Class-based usage", () => {
     beforeEach(() => {
       resetKafkaProducer();

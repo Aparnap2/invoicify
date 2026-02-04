@@ -7,11 +7,13 @@
  * Topics:
  * - invoice.uploaded: New invoice file uploaded
  * - invoice.processed: AI processing completed
+ * - invoice.uploaded.dlq: Dead Letter Queue for failed uploads
  *
  * Run tests with: pnpm test -- test/lib/kafka-producer.test.ts
  */
 
 import { Kafka } from "@upstash/kafka";
+import { logger } from "./logger";
 
 // ============================================================================
 // Types
@@ -75,6 +77,8 @@ export interface KafkaConfig {
   username: string;
   /** Upstash Kafka REST password */
   password: string;
+  /** Enable mock mode for testing (default: false) */
+  mockMode?: boolean;
 }
 
 /**
@@ -86,6 +90,56 @@ export interface PublishResult {
   partition?: number;
   offset?: number;
   error?: string;
+}
+
+// ============================================================================
+// Retry Logic with Exponential Backoff
+// ============================================================================
+
+/**
+ * Retry a function with exponential backoff
+ *
+ * @param fn - The async function to retry
+ * @param options - Retry configuration options
+ * @returns The result of the function
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: { maxRetries?: number; minTimeout?: number; maxTimeout?: number } = {}
+): Promise<T> {
+  const maxRetries = options.maxRetries ?? 3;
+  const minTimeout = options.minTimeout ?? 100;
+  const maxTimeout = options.maxTimeout ?? 5000;
+
+  let lastError: Error | undefined;
+
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      if (attempt > maxRetries) {
+        throw lastError;
+      }
+
+      // Exponential backoff with jitter
+      const baseDelay = Math.min(minTimeout * Math.pow(2, attempt - 1), maxTimeout);
+      const jitter = Math.random() * 100; // Add jitter to prevent thundering herd
+      const delay = baseDelay + jitter;
+
+      logger.warn("Kafka publish retry", {
+        attempt,
+        maxRetries,
+        delay_ms: Math.round(delay),
+        error: lastError.message,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError!;
 }
 
 // ============================================================================
@@ -102,15 +156,36 @@ export class KafkaProducer {
   private mockMode: boolean;
 
   constructor(config?: Partial<KafkaConfig>) {
-    this.mockMode = config?.url === "mock";
-
-    if (!this.mockMode) {
-      this.client = new Kafka({
-        url: config?.url || process.env.UPSTASH_KAFKA_REST_URL || "",
-        username: config?.username || process.env.UPSTASH_KAFKA_REST_USERNAME || "",
-        password: config?.password || process.env.UPSTASH_KAFKA_REST_PASSWORD || "",
-      });
+    // Check for explicit mock mode via config or environment variable
+    if (config?.mockMode || process.env.KAFKA_MOCK_MODE === "true") {
+      this.mockMode = true;
+      return;
     }
+
+    // Fallback: check for magic string (backwards compatibility)
+    if (config?.url === "mock") {
+      this.mockMode = true;
+      return;
+    }
+
+    // Fail-fast: validate required environment variables
+    const url = config?.url || process.env.UPSTASH_KAFKA_REST_URL;
+    const username = config?.username || process.env.UPSTASH_KAFKA_REST_USERNAME;
+    const password = config?.password || process.env.UPSTASH_KAFKA_REST_PASSWORD;
+
+    if (!url || !username || !password) {
+      const missingVars: string[] = [];
+      if (!url) missingVars.push("UPSTASH_KAFKA_REST_URL");
+      if (!username) missingVars.push("UPSTASH_KAFKA_REST_USERNAME");
+      if (!password) missingVars.push("UPSTASH_KAFKA_REST_PASSWORD");
+
+      throw new Error(
+        `[KafkaProducer] Configuration incomplete. Missing environment variables: ${missingVars.join(", ")}`
+      );
+    }
+
+    this.mockMode = false;
+    this.client = new Kafka({ url, username, password });
   }
 
   /**
@@ -124,10 +199,79 @@ export class KafkaProducer {
   }
 
   /**
-   * Check if producer is configured
+   * Check if producer is configured for real Kafka
    */
   isConfigured(): boolean {
     return !this.mockMode && !!this.client;
+  }
+
+  /**
+   * Publish to Dead Letter Queue
+   *
+   * @param topic - The original topic name (will have .dlq appended)
+   * @param value - The failed message payload
+   * @param error - The error that caused the failure
+   */
+  async publishToDLQ(
+    topic: string,
+    value: unknown,
+    error: string
+  ): Promise<PublishResult> {
+    const dlqTopic = topic.endsWith(".dlq") ? topic : `${topic}.dlq`;
+
+    if (this.mockMode) {
+      logger.info("Mock: published to DLQ", {
+        dlqTopic,
+        originalTopic: topic,
+        error,
+      });
+      return { success: true, topic: dlqTopic, partition: 0, offset: -1 };
+    }
+
+    try {
+      const producer = this.getProducer();
+      const result = await producer.produce(dlqTopic, {
+        key: (value as { invoiceId?: string }).invoiceId || "unknown",
+        value: {
+          original: value,
+          error,
+          failedAt: new Date().toISOString(),
+          traceId: (value as { traceId?: string }).traceId || "unknown",
+        },
+        headers: {
+          "x-dlq": "true",
+          "x-original-error": error.substring(0, 256), // Limit header size
+        },
+      });
+
+      logger.warn("Message sent to Dead Letter Queue", {
+        dlqTopic,
+        originalTopic: topic,
+        key: (value as { invoiceId?: string }).invoiceId || "unknown",
+        error,
+      });
+
+      return {
+        success: true,
+        topic: dlqTopic,
+        partition: result.partition,
+        offset: Number(result.baseOffset),
+      };
+    } catch (dlqError) {
+      const dlqErrorMessage =
+        dlqError instanceof Error ? dlqError.message : "Unknown error";
+
+      logger.error("Failed to publish to DLQ", {
+        dlqTopic,
+        dlqError: dlqErrorMessage,
+      });
+
+      return {
+        success: false,
+        topic: dlqTopic,
+        error: `DLQ publish failed: ${dlqErrorMessage}`,
+      };
+    }
   }
 
   /**
@@ -136,7 +280,9 @@ export class KafkaProducer {
    * @param event - The invoice uploaded event
    * @returns PublishResult indicating success or failure
    */
-  async publishInvoiceUploaded(event: InvoiceUploadedEvent): Promise<PublishResult> {
+  async publishInvoiceUploaded(
+    event: InvoiceUploadedEvent
+  ): Promise<PublishResult> {
     const startTime = Date.now();
 
     if (this.mockMode) {
@@ -144,21 +290,28 @@ export class KafkaProducer {
     }
 
     try {
-      const producer = this.getProducer();
-      const result = await producer.produce("invoice.uploaded", {
-        key: event.invoiceId,
-        value: event,
-        headers: {
-          "trace-id": event.traceId,
-          "user-id": event.userId,
-          "content-type": event.mimeType,
+      const result = await withRetry(
+        async () => {
+          const producer = this.getProducer();
+          return producer.produce("invoice.uploaded", {
+            key: event.invoiceId,
+            value: event,
+            headers: {
+              "trace-id": event.traceId,
+              "user-id": event.userId,
+              "content-type": event.mimeType,
+            },
+          });
         },
-      });
+        { maxRetries: 3, minTimeout: 100, maxTimeout: 5000 }
+      );
 
       const duration = Date.now() - startTime;
 
-      console.log(`[kafka] Published invoice.uploaded event`, {
+      logger.info("Published invoice.uploaded event", {
         invoiceId: event.invoiceId,
+        userId: event.userId,
+        traceId: event.traceId,
         partition: result.partition,
         offset: result.baseOffset,
         duration_ms: duration,
@@ -172,18 +325,29 @@ export class KafkaProducer {
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
 
-      console.error(`[kafka] Failed to publish invoice.uploaded event:`, {
+      logger.error("Failed to publish invoice.uploaded event", {
         invoiceId: event.invoiceId,
+        userId: event.userId,
+        traceId: event.traceId,
         error: errorMessage,
         duration_ms: duration,
       });
 
+      // On final failure, attempt to send to DLQ
+      const dlqResult = await this.publishToDLQ(
+        "invoice.uploaded",
+        event,
+        errorMessage
+      );
+
+      // Return original failure result, not DLQ result
       return {
         success: false,
         topic: "invoice.uploaded",
-        error: errorMessage,
+        error: `${errorMessage} (DLQ: ${dlqResult.success ? "sent" : "failed"})`,
       };
     }
   }
@@ -194,7 +358,9 @@ export class KafkaProducer {
    * @param event - The invoice processed event
    * @returns PublishResult indicating success or failure
    */
-  async publishInvoiceProcessed(event: InvoiceProcessedEvent): Promise<PublishResult> {
+  async publishInvoiceProcessed(
+    event: InvoiceProcessedEvent
+  ): Promise<PublishResult> {
     const startTime = Date.now();
 
     if (this.mockMode) {
@@ -202,24 +368,31 @@ export class KafkaProducer {
     }
 
     try {
-      const producer = this.getProducer();
-      const result = await producer.produce("invoice.processed", {
-        key: event.invoiceId,
-        value: event,
-        headers: {
-          "trace-id": event.traceId,
-          "status": event.status,
+      const result = await withRetry(
+        async () => {
+          const producer = this.getProducer();
+          return producer.produce("invoice.processed", {
+            key: event.invoiceId,
+            value: event,
+            headers: {
+              "trace-id": event.traceId,
+              status: event.status,
+            },
+          });
         },
-      });
+        { maxRetries: 3, minTimeout: 100, maxTimeout: 5000 }
+      );
 
       const duration = Date.now() - startTime;
 
-      console.log(`[kafka] Published invoice.processed event`, {
+      logger.info("Published invoice.processed event", {
         invoiceId: event.invoiceId,
+        userId: event.userId,
         status: event.status,
+        traceId: event.traceId,
+        duration_ms: duration,
         partition: result.partition,
         offset: result.baseOffset,
-        duration_ms: duration,
       });
 
       return {
@@ -230,18 +403,29 @@ export class KafkaProducer {
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
 
-      console.error(`[kafka] Failed to publish invoice.processed event:`, {
+      logger.error("Failed to publish invoice.processed event", {
         invoiceId: event.invoiceId,
+        userId: event.userId,
+        status: event.status,
+        traceId: event.traceId,
         error: errorMessage,
         duration_ms: duration,
       });
 
+      // On final failure, attempt to send to DLQ
+      const dlqResult = await this.publishToDLQ(
+        "invoice.processed",
+        event,
+        errorMessage
+      );
+
       return {
         success: false,
         topic: "invoice.processed",
-        error: errorMessage,
+        error: `${errorMessage} (DLQ: ${dlqResult.success ? "sent" : "failed"})`,
       };
     }
   }
@@ -254,7 +438,11 @@ export class KafkaProducer {
    * @param value - The message value
    * @returns PublishResult indicating success or failure
    */
-  async publish(topic: string, key: string, value: unknown): Promise<PublishResult> {
+  async publish(
+    topic: string,
+    key: string,
+    value: unknown
+  ): Promise<PublishResult> {
     const startTime = Date.now();
 
     if (this.mockMode) {
@@ -262,10 +450,25 @@ export class KafkaProducer {
     }
 
     try {
-      const producer = this.getProducer();
-      const result = await producer.produce(topic, {
+      const result = await withRetry(
+        async () => {
+          const producer = this.getProducer();
+          return producer.produce(topic, {
+            key,
+            value: value as Record<string, unknown>,
+          });
+        },
+        { maxRetries: 3, minTimeout: 100, maxTimeout: 5000 }
+      );
+
+      const duration = Date.now() - startTime;
+
+      logger.info("Published event to topic", {
+        topic,
         key,
-        value: value as Record<string, unknown>,
+        duration_ms: duration,
+        partition: result.partition,
+        offset: result.baseOffset,
       });
 
       return {
@@ -275,24 +478,42 @@ export class KafkaProducer {
         offset: Number(result.baseOffset),
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+
+      logger.error("Failed to publish event", {
+        topic,
+        key,
+        error: errorMessage,
+      });
+
+      const dlqResult = await this.publishToDLQ(topic, value, errorMessage);
 
       return {
         success: false,
         topic,
-        error: errorMessage,
+        error: `${errorMessage} (DLQ: ${dlqResult.success ? "sent" : "failed"})`,
       };
     }
   }
 
   /**
-   * Mock publish for testing
+   * Mock publish for testing (deterministic offsets)
    */
-  private mockPublish(topic: string, value: unknown, startTime: number): PublishResult {
+  private mockPublish(
+    topic: string,
+    value: unknown,
+    startTime: number
+  ): PublishResult {
     const duration = Date.now() - startTime;
 
-    console.log(`[kafka] Mock: published to ${topic}`, {
-      value,
+    const invoiceId = (value as InvoiceUploadedEvent)?.invoiceId ||
+      (value as InvoiceProcessedEvent)?.invoiceId ||
+      "unknown";
+
+    logger.info("Mock: published to topic", {
+      topic,
+      invoiceId,
       duration_ms: duration,
     });
 
@@ -300,7 +521,7 @@ export class KafkaProducer {
       success: true,
       topic,
       partition: 0,
-      offset: Math.floor(Math.random() * 10000),
+      offset: 1, // Deterministic offset for reliable tests
     };
   }
 }
