@@ -64,37 +64,23 @@ describe("KafkaProducer", () => {
           username: "test",
           password: "test",
         });
-      }).toThrow("Missing environment variables");
+      }).toThrow("UPSTASH_KAFKA_REST_URL");
     });
 
-    it("should throw error when username is missing", () => {
-      expect(() => {
-        new KafkaProducer({
-          url: "https://test.upstash.io",
-          username: "",
-          password: "test",
-        });
-      }).toThrow("Missing environment variables");
+    it("should initialize in real mode with URL only (no auth required)", () => {
+      const producer = new KafkaProducer({
+        url: "https://test.redpanda.io",
+      });
+      expect(producer.isConfigured()).toBe(true);
     });
 
-    it("should throw error when password is missing", () => {
-      expect(() => {
-        new KafkaProducer({
-          url: "https://test.upstash.io",
-          username: "test",
-          password: "",
-        });
-      }).toThrow("Missing environment variables");
-    });
-
-    it("should throw error when all credentials are missing", () => {
-      expect(() => {
-        new KafkaProducer({
-          url: "",
-          username: "",
-          password: "",
-        });
-      }).toThrow("UPSTASH_KAFKA_REST_URL, UPSTASH_KAFKA_REST_USERNAME, UPSTASH_KAFKA_REST_PASSWORD");
+    it("should initialize in real mode with full credentials", () => {
+      const producer = new KafkaProducer({
+        url: "https://test.upstash.io",
+        username: "test",
+        password: "test",
+      });
+      expect(producer.isConfigured()).toBe(true);
     });
   });
 

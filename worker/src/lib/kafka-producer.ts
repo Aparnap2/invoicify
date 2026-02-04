@@ -232,23 +232,25 @@ export class KafkaProducer {
 
     // Fail-fast: validate required environment variables
     const url = config?.url || process.env.UPSTASH_KAFKA_REST_URL;
+    // Username/password are optional (for Upstash) but may be needed for other brokers
     const username = config?.username || process.env.UPSTASH_KAFKA_REST_USERNAME;
     const password = config?.password || process.env.UPSTASH_KAFKA_REST_PASSWORD;
 
-    if (!url || !username || !password) {
-      const missingVars: string[] = [];
-      if (!url) missingVars.push("UPSTASH_KAFKA_REST_URL");
-      if (!username) missingVars.push("UPSTASH_KAFKA_REST_USERNAME");
-      if (!password) missingVars.push("UPSTASH_KAFKA_REST_PASSWORD");
-
+    if (!url) {
       throw new Error(
-        `[KafkaProducer] Configuration incomplete. Missing environment variables: ${missingVars.join(", ")}`
+        `[KafkaProducer] Configuration incomplete. Missing: UPSTASH_KAFKA_REST_URL (or config.url)`
       );
     }
 
+    // Username and password are optional - Upstash requires them, but other brokers may not
+    // If provided, use them; otherwise, use empty strings
     this.mockMode = false;
     this.retryConfig = getRetryConfig(config);
-    this.client = new Kafka({ url, username, password });
+    this.client = new Kafka({
+      url,
+      username: username || "",
+      password: password || "",
+    });
   }
 
   /**
