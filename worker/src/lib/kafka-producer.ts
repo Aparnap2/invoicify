@@ -16,6 +16,20 @@ import { Kafka } from "@upstash/kafka";
 import { logger } from "./logger";
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+/** Maximum length for HTTP header values to prevent overflow */
+const MAX_HEADER_LENGTH = 256;
+
+/** Default retry configuration */
+const DEFAULT_RETRY_CONFIG = {
+  maxRetries: 3,
+  minTimeout: 100,  // milliseconds
+  maxTimeout: 5000, // milliseconds
+};
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -68,6 +82,32 @@ export interface InvoiceProcessedEvent {
 }
 
 /**
+ * Dead Letter Queue payload - typed for type safety
+ */
+export interface DLQPayload<T = unknown> {
+  /** The original message that failed */
+  original: T;
+  /** The error that caused the failure */
+  error: string;
+  /** ISO timestamp when the failure occurred */
+  failedAt: string;
+  /** Trace ID for distributed tracing */
+  traceId: string;
+}
+
+/**
+ * Retry configuration options
+ */
+export interface RetryConfig {
+  /** Maximum number of retry attempts (default: 3) */
+  maxRetries?: number;
+  /** Minimum timeout between retries in ms (default: 100) */
+  minTimeout?: number;
+  /** Maximum timeout between retries in ms (default: 5000) */
+  maxTimeout?: number;
+}
+
+/**
  * Kafka producer configuration
  */
 export interface KafkaConfig {
@@ -79,6 +119,8 @@ export interface KafkaConfig {
   password: string;
   /** Enable mock mode for testing (default: false) */
   mockMode?: boolean;
+  /** Retry configuration */
+  retry?: RetryConfig;
 }
 
 /**
@@ -97,6 +139,24 @@ export interface PublishResult {
 // ============================================================================
 
 /**
+ * Get retry configuration from config or environment
+ */
+function getRetryConfig(config?: Partial<KafkaConfig>): Required<RetryConfig> {
+  const envRetries = process.env.KAFKA_MAX_RETRIES;
+  const envMinTimeout = process.env.KAFKA_RETRY_MIN_TIMEOUT;
+  const envMaxTimeout = process.env.KAFKA_RETRY_MAX_TIMEOUT;
+
+  return {
+    maxRetries: config?.retry?.maxRetries ??
+      (envRetries ? parseInt(envRetries, 10) : DEFAULT_RETRY_CONFIG.maxRetries),
+    minTimeout: config?.retry?.minTimeout ??
+      (envMinTimeout ? parseInt(envMinTimeout, 10) : DEFAULT_RETRY_CONFIG.minTimeout),
+    maxTimeout: config?.retry?.maxTimeout ??
+      (envMaxTimeout ? parseInt(envMaxTimeout, 10) : DEFAULT_RETRY_CONFIG.maxTimeout),
+  };
+}
+
+/**
  * Retry a function with exponential backoff
  *
  * @param fn - The async function to retry
@@ -105,32 +165,31 @@ export interface PublishResult {
  */
 async function withRetry<T>(
   fn: () => Promise<T>,
-  options: { maxRetries?: number; minTimeout?: number; maxTimeout?: number } = {}
+  options: Required<RetryConfig>
 ): Promise<T> {
-  const maxRetries = options.maxRetries ?? 3;
-  const minTimeout = options.minTimeout ?? 100;
-  const maxTimeout = options.maxTimeout ?? 5000;
-
   let lastError: Error | undefined;
 
-  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+  for (let attempt = 1; attempt <= options.maxRetries + 1; attempt++) {
     try {
       return await fn();
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
 
-      if (attempt > maxRetries) {
+      if (attempt > options.maxRetries) {
         throw lastError;
       }
 
       // Exponential backoff with jitter
-      const baseDelay = Math.min(minTimeout * Math.pow(2, attempt - 1), maxTimeout);
+      const baseDelay = Math.min(
+        options.minTimeout * Math.pow(2, attempt - 1),
+        options.maxTimeout
+      );
       const jitter = Math.random() * 100; // Add jitter to prevent thundering herd
       const delay = baseDelay + jitter;
 
       logger.warn("Kafka publish retry", {
         attempt,
-        maxRetries,
+        maxRetries: options.maxRetries,
         delay_ms: Math.round(delay),
         error: lastError.message,
       });
@@ -154,17 +213,20 @@ async function withRetry<T>(
 export class KafkaProducer {
   private client: Kafka | null = null;
   private mockMode: boolean;
+  private retryConfig: Required<RetryConfig>;
 
   constructor(config?: Partial<KafkaConfig>) {
     // Check for explicit mock mode via config or environment variable
     if (config?.mockMode || process.env.KAFKA_MOCK_MODE === "true") {
       this.mockMode = true;
+      this.retryConfig = getRetryConfig(config);
       return;
     }
 
     // Fallback: check for magic string (backwards compatibility)
     if (config?.url === "mock") {
       this.mockMode = true;
+      this.retryConfig = getRetryConfig(config);
       return;
     }
 
@@ -185,6 +247,7 @@ export class KafkaProducer {
     }
 
     this.mockMode = false;
+    this.retryConfig = getRetryConfig(config);
     this.client = new Kafka({ url, username, password });
   }
 
@@ -206,15 +269,22 @@ export class KafkaProducer {
   }
 
   /**
+   * Get retry configuration (for testing/debugging)
+   */
+  getRetryConfig(): Required<RetryConfig> {
+    return this.retryConfig;
+  }
+
+  /**
    * Publish to Dead Letter Queue
    *
    * @param topic - The original topic name (will have .dlq appended)
    * @param value - The failed message payload
    * @param error - The error that caused the failure
    */
-  async publishToDLQ(
+  async publishToDLQ<T>(
     topic: string,
-    value: unknown,
+    value: T,
     error: string
   ): Promise<PublishResult> {
     const dlqTopic = topic.endsWith(".dlq") ? topic : `${topic}.dlq`;
@@ -229,18 +299,21 @@ export class KafkaProducer {
     }
 
     try {
+      // Type-safe DLQ payload
+      const dlqPayload: DLQPayload<T> = {
+        original: value,
+        error,
+        failedAt: new Date().toISOString(),
+        traceId: (value as { traceId?: string }).traceId || "unknown",
+      };
+
       const producer = this.getProducer();
       const result = await producer.produce(dlqTopic, {
         key: (value as { invoiceId?: string }).invoiceId || "unknown",
-        value: {
-          original: value,
-          error,
-          failedAt: new Date().toISOString(),
-          traceId: (value as { traceId?: string }).traceId || "unknown",
-        },
+        value: dlqPayload,
         headers: {
           "x-dlq": "true",
-          "x-original-error": error.substring(0, 256), // Limit header size
+          "x-original-error": error.substring(0, MAX_HEADER_LENGTH),
         },
       });
 
@@ -303,7 +376,7 @@ export class KafkaProducer {
             },
           });
         },
-        { maxRetries: 3, minTimeout: 100, maxTimeout: 5000 }
+        this.retryConfig
       );
 
       const duration = Date.now() - startTime;
@@ -380,7 +453,7 @@ export class KafkaProducer {
             },
           });
         },
-        { maxRetries: 3, minTimeout: 100, maxTimeout: 5000 }
+        this.retryConfig
       );
 
       const duration = Date.now() - startTime;
@@ -438,10 +511,10 @@ export class KafkaProducer {
    * @param value - The message value
    * @returns PublishResult indicating success or failure
    */
-  async publish(
+  async publish<T>(
     topic: string,
     key: string,
-    value: unknown
+    value: T
   ): Promise<PublishResult> {
     const startTime = Date.now();
 
@@ -458,7 +531,7 @@ export class KafkaProducer {
             value: value as Record<string, unknown>,
           });
         },
-        { maxRetries: 3, minTimeout: 100, maxTimeout: 5000 }
+        this.retryConfig
       );
 
       const duration = Date.now() - startTime;

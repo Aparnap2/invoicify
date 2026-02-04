@@ -54,9 +54,15 @@ preview_id = ""
 
 # Upstash Kafka (for async AI processing)
 # Get these from Upstash Console: https://console.upstash.com/kafka
-# UPSTASH_KAFKA_REST_URL
-# UPSTASH_KAFKA_REST_USERNAME
-# UPSTASH_KAFKA_REST_PASSWORD
+# Set via: npx wrangler secret put UPSTASH_KAFKA_REST_URL
+# Set via: npx wrangler secret put UPSTASH_KAFKA_REST_USERNAME
+# Set via: npx wrangler secret put UPSTASH_KAFKA_REST_PASSWORD
+#
+# Optional Kafka configuration:
+# KAFKA_MOCK_MODE=true - Enable mock mode for testing (default: false)
+# KAFKA_MAX_RETRIES=3 - Number of retry attempts (default: 3)
+# KAFKA_RETRY_MIN_TIMEOUT=100 - Min retry delay in ms (default: 100)
+# KAFKA_RETRY_MAX_TIMEOUT=5000 - Max retry delay in ms (default: 5000)
 
 [vars]
 ENVIRONMENT = "production"
