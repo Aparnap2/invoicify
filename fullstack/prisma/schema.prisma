@@ -1,4 +1,5 @@
-// Prisma schema for Invoicify
+// Prisma schema for Invoicify SaaS Platform
+// Multi-tenant architecture with organization-based isolation
 // Run `pnpm prisma:generate` after changes
 
 generator client {
@@ -9,6 +10,10 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+// ============================================================================
+// User & Authentication (Better Auth)
+// ============================================================================
 
 // User model for authentication
 model User {
@@ -23,8 +28,7 @@ model User {
 
   accounts      Account[]
   sessions      Session[]
-  invoices      Invoice[]
-  approvals     InvoiceApproval[]
+  organizationMemberships OrganizationUser[]
 
   @@map("users")
 }
@@ -36,7 +40,7 @@ enum UserRole {
   VIEWER
 }
 
-// Account model for OAuth (NextAuth/Better Auth)
+// Account model for OAuth (Better Auth)
 model Account {
   id                String  @id @default(cuid())
   userId            String
@@ -78,6 +82,282 @@ model VerificationToken {
   @@map("verification_tokens")
 }
 
+// ============================================================================
+// Multi-Tenancy: Organizations
+// ============================================================================
+
+// Organization/Tenant model
+model Organization {
+  id              String    @id @default(cuid())
+  name            String
+  slug            String    @unique  // For API paths: invoicify.com/:slug/invoices
+                    // NOTE: Slug is IMMUTABLE after creation to prevent breaking API integrations
+  domain          String?   @unique  // Email domain restriction for SSO
+  logoUrl         String?
+
+  // Subscription
+  plan            Plan      @default(FREE)
+  subscriptionId  String?
+  billingEmail    String?
+
+  // Features
+  maxUsers        Int       @default(5)
+  maxInvoices     Int       @default(100)
+  features        Json?     // Feature flags per plan
+
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  users           OrganizationUser[]
+  invoices        Invoice[]
+  vendors         Vendor[]
+  integrations    Integration[]
+  apiKeys         ApiKey[]
+  auditLogs       AuditLog[]
+  workflows       Workflow[]
+  syncQueue       SyncQueue[]
+  invitations     Invitation[]
+  aiConfig        OrganizationAIConfig?
+
+  @@map("organizations")
+}
+
+enum Plan {
+  FREE      @default  // 100 invoices/month
+  STARTER   // 500 invoices/month
+  PROFESSIONAL // 2000 invoices/month
+  ENTERPRISE // Unlimited
+}
+
+// Organization-User junction with role
+model OrganizationUser {
+  id             String       @id @default(cuid())
+  organizationId String
+  userId         String
+  role           OrgRole      @default(USER)
+  status         MemberStatus @default(ACTIVE)
+
+  // Per-tenant permissions
+  approvalLimit  Decimal?     @db.Decimal(12, 2)
+  canApprove     Boolean      @default(false)
+  canExport      Boolean      @default(false)
+
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@map("organization_users")
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  FINANCE
+  APPROVER
+  USER
+  VIEWER
+}
+
+enum MemberStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_INVITE
+}
+
+// Invitation model for team onboarding
+model Invitation {
+  id             String   @id @default(cuid())
+  email          String
+  organizationId String
+  role           OrgRole  @default(USER)
+  status         InviteStatus @default(PENDING)
+
+  // Invitation token (cryptographically secure)
+  token          String   @unique
+  expiresAt      DateTime
+  inviterId      String
+  invitedAt      DateTime @default(now())
+  acceptedAt     DateTime?
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, email])
+  @@map("invitations")
+}
+
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+// ============================================================================
+// API Keys (Service Accounts + PATs)
+// ============================================================================
+
+model ApiKey {
+  id             String       @id @default(cuid())
+  organizationId String
+
+  // Key metadata
+  name           String
+  description    String?
+
+  // Key type: SERVICE_ACCOUNT (long-lived) or PAT (personal, short-lived)
+  keyType       ApiKeyType   @default(SERVICE_ACCOUNT)
+  keyHash        String       @unique  // Store hash, NOT plain key
+  keyPrefix      String       // First 8 chars for identification (display only)
+
+  // Security
+  permissions    String[]
+  rateLimit      Int          @default(100)
+  ipWhitelist    String[]?
+
+  // Lifecycle
+  expiresAt      DateTime?
+  lastUsedAt     DateTime?
+  lastUsedIp     String?
+  revokedAt      DateTime?
+  createdBy      String
+
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([keyHash])
+  @@map("api_keys")
+}
+
+enum ApiKeyType {
+  SERVICE_ACCOUNT  // Long-lived, for integrations
+  PAT             // Personal Access Token, short-lived
+}
+
+// ============================================================================
+// Integrations
+// ============================================================================
+
+model Integration {
+  id             String       @id @default(cuid())
+  organizationId String
+  integration    String       // quickbooks, xero, stripe, etc.
+  status        IntegrationStatus @default(DISCONNECTED)
+
+  // OAuth tokens (encrypted!)
+  accessToken   String?      @db.Text
+  refreshToken  String?      @db.Text
+  tokenExpiresAt DateTime?
+  realmId       String?      // QuickBooks specific
+
+  // Configuration
+  config        Json?
+
+  // Webhook for event-driven integrations
+  webhookUrl    String?
+  webhookSecret String?
+
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, integration])
+  @@map("integrations")
+}
+
+enum IntegrationStatus {
+  DISCONNECTED
+  CONNECTING
+  CONNECTED
+  ERROR
+  SYNCING
+}
+
+// ============================================================================
+// Billing & Subscription
+// ============================================================================
+
+model Subscription {
+  id               String   @id @default(cuid())
+  organizationId   String   @unique
+
+  stripeCustomerId String   @unique
+  stripeSubscriptionId String?
+  stripePriceId   String?
+  plan             Plan     @default(FREE)
+
+  // Per-invoice pricing
+  invoicesProcessed Int      @default(0)
+  invoicesLimit     Int      @default(100)
+  overageRate      Decimal  @db.Decimal(5, 4)  // $0.05 per extra invoice
+
+  // Billing period
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd   Boolean @default(false)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization      Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([stripeCustomerId])
+  @@index([stripeSubscriptionId])
+  @@map("subscriptions")
+}
+
+// ============================================================================
+// AI Configuration (Per-Tenant Feature Routing)
+// ============================================================================
+
+model OrganizationAIConfig {
+  id             String   @id @default(cuid())
+  organizationId String   @unique
+
+  // Feature-specific model routing
+  extractionModel     String   @default("qwen2.5-coder:3b")
+  extractionProvider  String   @default("ollama")
+
+  chatModel          String   @default("qwen2.5-coder:3b")
+  chatProvider       String   @default("ollama")
+
+  embeddingModel     String   @default("nomic-embed-text")
+  embeddingProvider  String   @default("ollama")
+
+  // Cost controls
+  monthlyBudget      Decimal? @db.Decimal(10, 2)
+  currentSpend      Decimal  @default(0) @db.Decimal(10, 2)
+
+  // Rate limits
+  maxTokensPerRequest Int    @default(4000)
+  requestsPerMinute   Int    @default(60)
+
+  // Prompt templates
+  extractionPrompt   Json?
+  classificationPrompt Json?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("organization_ai_configs")
+}
+
+// ============================================================================
+// Core Business Entities (Now Tenant-Isolated)
+// ============================================================================
+
 // Invoice model
 model Invoice {
   id              String        @id @default(cuid())
@@ -108,20 +388,25 @@ model Invoice {
   confidenceScore Float?
   requiresApproval Boolean      @default(false)
 
-  // Metadata
+  // Multi-tenancy
+  organizationId  String
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdByOrgUserId String
+  createdByOrgUser   OrganizationUser @relation(fields: [createdByOrgUserId], references: [id])
+
+  // Timestamps
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
-  createdById     String
-  createdBy       User          @relation(fields: [createdById], references: [id])
 
   // Relations
   lineItems       LineItem[]
   approvals       InvoiceApproval[]
   auditLogs       AuditLog[]
 
-  @@unique([invoiceNumber, vendorName])
+  @@unique([invoiceNumber, vendorName, organizationId])
   @@index([status])
   @@index([createdAt])
+  @@index([organizationId])
   @@map("invoices")
 }
 
@@ -167,7 +452,7 @@ model InvoiceApproval {
   invoice     Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   approverId  String
-  approver    User           @relation(fields: [approverId], references: [id])
+  approver    OrganizationUser @relation(fields: [approverId], references: [id])
 
   status      ApprovalStatus @default(PENDING)
   comments    String?
@@ -187,24 +472,115 @@ enum ApprovalStatus {
   REJECTED
 }
 
-// Audit log for tracking changes
+// Vendor model (for reference data)
+model Vendor {
+  id             String   @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name           String
+  address        String?
+  taxId          String?
+  email          String?
+  phone          String?
+  isVerified     Boolean  @default(false)
+  trustScore     Float?   // From Trust Battery
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, name])
+  @@map("vendors")
+}
+
+// Audit log for comprehensive enterprise tracking
 model AuditLog {
   id          String   @id @default(cuid())
-  invoiceId   String?
-  invoice     Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
 
-  action      String
-  entityType  String
-  entityId    String
-  oldValue    Json?
-  newValue    Json?
-  performedBy String?
-  ipAddress   String?
+  // Core fields
+  timestamp   DateTime @default(now()) @map("timestamp")
+  organizationId String @map("organization_id")
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Actor information
+  actorUserId String @map("actor_user_id")
+  actorEmail  String? @map("actor_email")
+  actorName   String? @map("actor_name")
+  actorRole   String? @map("actor_role")
+
+  // Action details
+  action      String   // USER_LOGIN, INVOICE_CREATED, etc.
+  resourceType String @map("resource_type")
+  resourceId  String @map("resource_id")
+  resourceName String? @map("resource_name")
+
+  // Additional details
+  details     Json?    // Flexible JSON for action-specific data
+  severity    String   @default("INFO") // INFO, WARNING, ERROR, CRITICAL
+
+  // Request metadata
+  ipAddress   String? @map("ip_address")
+  userAgent   String? @map("user_agent")
+  correlationId String? @map("correlation_id")
+
+  // Retention
+  archivedAt  DateTime? @map("archived_at")
+  storageLocation String? @map("storage_location")
 
   createdAt   DateTime @default(now())
 
-  @@index([invoiceId])
+  @@index([organizationId])
+  @@index([actorUserId])
   @@index([action])
-  @@index([createdAt])
+  @@index([severity])
+  @@index([resourceType])
+  @@index([timestamp])
+  @@index([correlationId])
   @@map("audit_logs")
+}
+
+// Workflow configuration
+model Workflow {
+  id             String   @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name           String
+  trigger        String   // invoice_uploaded, invoice_approved, etc.
+  conditions     Json?
+  actions        Json[]
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId])
+  @@map("workflows")
+}
+
+// Sync queue for integrations
+model SyncQueue {
+  id             String   @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  integration    String   // quickbooks, xero, etc.
+  entityType     String   // invoice, payment, etc.
+  entityId       String
+  status         SyncStatus @default(PENDING)
+  attempts       Int      @default(0)
+  lastError      String?
+  scheduledAt    DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("sync_queue")
+}
+
+enum SyncStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
 }

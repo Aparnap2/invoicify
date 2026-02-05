@@ -14,6 +14,9 @@ import { quickbooksRoutes } from "./routes/quickbooks";
 import { slackRoutes } from "./routes/slack";
 import { seedRoutes } from "./routes/seed";
 import { evalRoutes } from "./routes/eval";
+import { billingRoutes } from "./routes/billing";
+import { apiKeysRoutes } from "./routes/api-keys";
+import { auditLogsRoutes } from "./routes/audit-logs";
 import type { Env } from "./db";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -53,6 +56,9 @@ app.route("/api/v1/quickbooks", quickbooksRoutes);
 app.route("/api/v1/slack", slackRoutes);
 app.route("/api/v1/seed", seedRoutes);
 app.route("/api/v1/eval", evalRoutes);
+app.route("/api/v1/billing", billingRoutes);
+app.route("/api/v1/api-keys", apiKeysRoutes);
+app.route("/api/v1/audit-logs", auditLogsRoutes);
 
 // Middleware to block seed/eval routes in production
 app.use("/api/v1/seed/*", async (c, next) => {
