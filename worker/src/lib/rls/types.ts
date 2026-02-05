@@ -4,23 +4,41 @@
  * Defines user roles, permissions, and access control types for the Invoicify API.
  */
 
-// User roles with ascending privilege order
-export type UserRole = 'VIEWER' | 'USER' | 'APPROVER' | 'FINANCE' | 'ADMIN';
+// Organization roles with ascending privilege order
+export type OrgRole =
+  | 'VIEWER'
+  | 'USER'
+  | 'APPROVER'
+  | 'FINANCE'
+  | 'ADMIN'
+  | 'OWNER';
+
+// User roles (alias for backward compatibility)
+export type UserRole = OrgRole;
 
 // Role hierarchy for permission inheritance
-export const ROLE_HIERARCHY: Record<UserRole, number> = {
+export const ROLE_HIERARCHY = {
   VIEWER: 1,
   USER: 2,
   APPROVER: 3,
   FINANCE: 4,
   ADMIN: 5,
-};
+  OWNER: 6,
+} as const;
+
+// Type inference for ROLE_HIERARCHY values
+export type RoleHierarchyValue = (typeof ROLE_HIERARCHY)[keyof typeof ROLE_HIERARCHY];
 
 // Role permissions mapping
-export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
+export const ROLE_PERMISSIONS: Record<OrgRole, string[]> = {
   VIEWER: ['invoices:read', 'vendors:read'],
   USER: ['invoices:read', 'invoices:create', 'vendors:read'],
-  APPROVER: ['invoices:read', 'invoices:approve', 'approvals:read', 'approvals:update'],
+  APPROVER: [
+    'invoices:read',
+    'invoices:approve',
+    'approvals:read',
+    'approvals:update',
+  ],
   FINANCE: [
     'invoices:read',
     'invoices:write',
@@ -41,6 +59,20 @@ export const ROLE_PERMISSIONS: Record<UserRole, string[]> = {
     'users:*',
     'settings:*',
     'reports:*',
+    'api_keys:*',
+    'billing:read',
+  ],
+  OWNER: [
+    'invoices:*',
+    'vendors:*',
+    'approvals:*',
+    'audit_logs:*',
+    'users:*',
+    'settings:*',
+    'reports:*',
+    'api_keys:*',
+    'billing:*',
+    'organization:*',
   ],
 };
 
@@ -59,18 +91,43 @@ export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 // User context for RLS checks
 export interface RLSContext {
+  // User identification
   userId: string;
-  role: UserRole;
-  tenantId: string;
+
+  // Organization context for tenant isolation
+  organizationId: string;
+
+  // User role within the organization
+  role: OrgRole;
+
+  // Permission scopes for fine-grained access control
+  scopes: string[];
+
+  // Optional email for audit purposes
   email?: string;
+
+  // Approval limit for APPROVER role (amount in cents)
   approvalLimit?: number;
+
+  // Optional tenant ID for backward compatibility
+  tenantId?: string;
 }
 
 // Resource definition for RLS evaluation
 export interface RLSResource {
-  type: 'invoice' | 'vendor' | 'approval' | 'audit_log' | 'report' | 'setting';
+  type:
+    | 'invoice'
+    | 'vendor'
+    | 'approval'
+    | 'audit_log'
+    | 'report'
+    | 'setting'
+    | 'user'
+    | 'api_key'
+    | 'billing';
   id?: string;
   ownerId?: string;
+  organizationId?: string;
   tenantId?: string;
   status?: InvoiceStatus;
   amount?: number;
@@ -88,4 +145,33 @@ export interface RLSPolicyResult {
 export interface PermissionResult {
   allowed: boolean;
   reason?: string;
+}
+
+// Helper type for role-based access control
+export interface RBACConfig {
+  minRole: OrgRole;
+  requiredPermissions?: string[];
+  denyPermissions?: string[];
+}
+
+// Organization membership types
+export interface OrgMembership {
+  userId: string;
+  organizationId: string;
+  role: OrgRole;
+  joinedAt: Date;
+  invitedBy: string;
+}
+
+// API Key types
+export interface ApiKey {
+  id: string;
+  organizationId: string;
+  name: string;
+  hashedKey: string;
+  createdAt: Date;
+  lastUsedAt?: Date;
+  expiresAt?: Date;
+  scopes: string[];
+  isActive: boolean;
 }

@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     )
     openai_api_key: Optional[str] = Field(default=None, description="OpenAI API key (fallback)")
 
+    # OCR Model - for document extraction
+    ocr_model: Optional[str] = Field(default=None, description="OCR model for document extraction")
+
     # Server Configuration
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8001)

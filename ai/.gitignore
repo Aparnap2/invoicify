@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+eggs/
+.part
+.pytest_cache/
+.coverage
+.pytest_cache/
+htmlcov/
+.eggs/
+*.egg
+*.egg-info/
+dist/
+build/
+
+# uv
+.venv/
+
+# DeepEval
+.deepeval/
+
+# Test results
+test-results/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

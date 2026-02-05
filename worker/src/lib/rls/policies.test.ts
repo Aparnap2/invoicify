@@ -390,10 +390,13 @@ describe('Query Filtering', () => {
   ];
 
   describe('buildInvoiceFilter', () => {
-    it('should allow admin to see all invoices', () => {
+    it('should allow admin to see all invoices in their tenant', () => {
       const filter = buildInvoiceFilter(adminContext);
       const visible = invoices.filter(filter);
-      expect(visible).toHaveLength(6);
+      // Admin sees all invoices from their tenant (tenant-1) = 5 invoices
+      // Invoice 6 is from tenant-2, so it's filtered out
+      expect(visible).toHaveLength(5);
+      expect(visible.every(i => i.tenantId === 'tenant-1')).toBe(true);
     });
 
     it('should allow approver to see only pending', () => {
@@ -420,7 +423,8 @@ describe('Query Filtering', () => {
   describe('filterByRLS', () => {
     it('should filter invoices by RLS context', () => {
       const filtered = filterByRLS(invoices, adminContext, 'invoice');
-      expect(filtered).toHaveLength(6);
+      // Admin sees 5 invoices from their tenant (tenant-1)
+      expect(filtered).toHaveLength(5);
 
       const userFiltered = filterByRLS(invoices, userContext, 'invoice');
       expect(userFiltered).toHaveLength(3);
