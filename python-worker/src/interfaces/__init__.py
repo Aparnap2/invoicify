@@ -228,3 +228,37 @@ class WarehouseAdapter(ABC):
             data: Data to save
         """
         pass
+
+
+class VisionAdapter(ABC):
+    """
+    Abstract base class for document extraction/vision adapters.
+
+    Implementations:
+    - DoclingAdapter: IBM Docling for structured document understanding (default)
+    - WatsonAdapter: IBM Watson Discovery for enterprise
+    - GroqAdapter: Groq Cloud Vision API
+    """
+
+    @abstractmethod
+    async def extract_invoice_data(self, file_path_or_url: str) -> Dict[str, Any]:
+        """
+        Extract structured data from an invoice document.
+
+        Args:
+            file_path_or_url: Path to local file or URL to remote document
+
+        Returns:
+            Dict containing:
+            - raw_text: Structured content (Markdown for Docling)
+            - format: Content format (markdown, json, text)
+            - tables_detected: Number of tables found
+            - confidence: Extraction confidence score
+            - metadata: Additional document metadata
+        """
+        pass
+
+    @abstractmethod
+    async def health_check(self) -> bool:
+        """Check if the vision service is healthy and available."""
+        pass

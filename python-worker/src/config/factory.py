@@ -7,7 +7,7 @@ import os
 import logging
 from typing import Union
 
-from src.interfaces import DatabaseAdapter, SecretsAdapter
+from src.interfaces import DatabaseAdapter, SecretsAdapter, VisionAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -131,3 +131,44 @@ def get_secrets() -> SecretsAdapter:
     if not hasattr(get_secrets, "_instance"):
         get_secrets._instance = get_secrets_adapter()
     return get_secrets._instance
+
+
+def get_vision_adapter() -> VisionAdapter:
+    """
+    Factory function to get vision/document extraction adapter.
+
+    Returns:
+        VisionAdapter: Configured vision adapter
+
+    Environment Variables:
+        VISION_MODE: 'docling', 'watson', or 'groq' (default: 'docling')
+        VISION_API_KEY: API key for cloud providers (watson/groq)
+        VISION_API_URL: Custom endpoint URL (optional)
+    """
+    mode = os.getenv("VISION_MODE", "docling").lower()
+
+    if mode == "watson":
+        logger.info("🔍 Using IBM Watson Discovery (Enterprise)")
+        # TODO: Implement WatsonAdapter
+        raise NotImplementedError("Watson Vision adapter not yet implemented")
+
+    elif mode == "groq":
+        logger.info("🔍 Using Groq Cloud Vision API")
+        # TODO: Implement GroqAdapter
+        raise NotImplementedError("Groq Vision adapter not yet implemented")
+
+    else:
+        logger.info("📄 Using IBM Docling (Local Document Understanding)")
+
+        from src.infrastructure.vision_docling import DoclingAdapter
+
+        adapter = DoclingAdapter()
+
+    return adapter
+
+
+def get_vision() -> VisionAdapter:
+    """Get configured vision adapter (singleton pattern)."""
+    if not hasattr(get_vision, "_instance"):
+        get_vision._instance = get_vision_adapter()
+    return get_vision._instance
