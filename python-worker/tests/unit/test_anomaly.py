@@ -3,10 +3,6 @@ Unit tests for Anomaly Detection (TDD - Step 3)
 Fixed: CodeRabbit review issues - updated assertions, validation tests
 """
 
-import sys
-
-sys.path.insert(0, "/home/aparna/Desktop/invoicify/python-worker/src")
-
 import pytest
 import tempfile
 import os

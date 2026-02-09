@@ -4,7 +4,9 @@ Extracts structured invoice data from documents using IBM Docling.
 """
 
 import logging
-from datetime import datetime
+import re
+import uuid
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, Any
 
@@ -27,38 +29,46 @@ async def extract_invoice_with_docling(file_url: str) -> Dict[str, Any]:
     Returns:
         InvoiceData as dictionary
     """
-    logger.info(f"🔍 Extracting invoice from: {file_url}")
+    # Sanitize URL for logging (remove query params)
+    from urllib.parse import urlparse
 
-    # Get Docling adapter from factory
-    vision_adapter = get_vision()
+    parsed = urlparse(file_url)
+    safe_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    logger.info(f"🔍 Extracting invoice from: {safe_url}")
 
-    # Extract document
-    extraction = await vision_adapter.extract_invoice_data(file_url)
+    try:
+        # Get Docling adapter from factory
+        vision_adapter = get_vision()
 
-    # Parse Markdown to extract structured data
-    # In production, this would use an LLM to parse the Markdown
-    # For now, use simple heuristics
-    markdown = extraction["raw_text"]
+        # Extract document
+        extraction = await vision_adapter.extract_invoice_data(file_url)
 
-    # Extract fields from Markdown
-    invoice_data = _parse_markdown_invoice(
-        markdown,
-        extraction["metadata"],
-    )
+        # Parse Markdown to extract structured data
+        markdown = extraction["raw_text"]
 
-    # Add confidence and format info
-    invoice_data["confidence"] = extraction["confidence"]
-    invoice_data["tables_detected"] = extraction["tables_detected"]
+        # Extract fields from Markdown
+        invoice_data = _parse_markdown_invoice(markdown)
 
-    logger.info(
-        f"✅ Extracted invoice: {invoice_data['invoice_number']} "
-        f"from {invoice_data['vendor_name']}"
-    )
+        # Add confidence and format info
+        invoice_data["confidence"] = extraction["confidence"]
+        invoice_data["tables_detected"] = extraction["tables_detected"]
 
-    return invoice_data
+        logger.info(
+            f"✅ Extracted invoice: {invoice_data['invoice_number']} "
+            f"from {invoice_data['vendor_name']}"
+        )
+
+        return invoice_data
+
+    except Exception as e:
+        logger.error(f"❌ Failed to extract invoice from {safe_url}: {e}")
+        raise activity.ApplicationError(
+            f"Invoice extraction failed: {str(e)}",
+            non_retryable=False,
+        ) from e
 
 
-def _parse_markdown_invoice(markdown: str, metadata: Dict) -> Dict[str, Any]:
+def _parse_markdown_invoice(markdown: str) -> Dict[str, Any]:
     """
     Parse Markdown invoice content to structured data.
 
@@ -75,8 +85,6 @@ def _parse_markdown_invoice(markdown: str, metadata: Dict) -> Dict[str, Any]:
             break
 
     # Generate IDs
-    import uuid
-
     invoice_id = str(uuid.uuid4())
     vendor_id = f"vendor_{vendor_name.lower().replace(' ', '_')}"
 
@@ -85,8 +93,6 @@ def _parse_markdown_invoice(markdown: str, metadata: Dict) -> Dict[str, Any]:
     for line in lines:
         if "invoice" in line.lower() and "#" not in line:
             # Try to find number pattern
-            import re
-
             match = re.search(r"[A-Z]*-?\d+", line)
             if match:
                 invoice_number = match.group()
@@ -96,8 +102,6 @@ def _parse_markdown_invoice(markdown: str, metadata: Dict) -> Dict[str, Any]:
     total_amount = Decimal("0.00")
     for line in lines:
         if "total" in line.lower() or "$" in line:
-            import re
-
             match = re.search(r"\$?([\d,]+\.\d{2})", line)
             if match:
                 amount_str = match.group(1).replace(",", "")
@@ -107,8 +111,8 @@ def _parse_markdown_invoice(markdown: str, metadata: Dict) -> Dict[str, Any]:
     # Parse line items from tables
     line_items = _parse_line_items(markdown)
 
-    # Default dates
-    now = datetime.utcnow()
+    # Default dates (timezone-aware)
+    now = datetime.now(timezone.utc)
 
     return {
         "invoice_id": invoice_id,
@@ -129,11 +133,11 @@ def _parse_line_items(markdown: str) -> list:
     items = []
     lines = markdown.split("\n")
 
-    in_table = False
     for line in lines:
-        if "|" in line and not line.strip().startswith("|"):
-            # Skip header separator
-            if "---" in line:
+        # Detect Markdown table rows (lines containing |)
+        if "|" in line:
+            # Skip header separator lines
+            if "---" in line and line.strip().startswith("|"):
                 continue
 
             # Parse table row

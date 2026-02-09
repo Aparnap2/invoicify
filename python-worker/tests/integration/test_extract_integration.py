@@ -3,17 +3,13 @@ Integration test for Vision Extraction (Step 2)
 Tests extract.py against running mock server
 """
 
-import sys
 import os
 import pytest
 import subprocess
 import time
 import signal
 
-# Add src to path
-sys.path.insert(0, "/home/aparna/Desktop/invoicify/python-worker/src")
-
-from activities.extract import extract_invoice_data, VisionAPIError
+from src.activities.extract import extract_invoice_data, VisionAPIError
 
 
 @pytest.fixture(scope="module")

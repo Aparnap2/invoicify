@@ -5,12 +5,20 @@ Executes payment for approved invoices.
 
 import logging
 import uuid
+import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, Any
 
 from temporalio import activity
 
 logger = logging.getLogger(__name__)
+
+
+class PaymentProcessingError(Exception):
+    """Custom exception for payment processing failures."""
+
+    pass
 
 
 @activity.defn
@@ -47,8 +55,6 @@ async def process_payment(params: Dict[str, Any]) -> Dict[str, Any]:
         payment_reference = f"PAY-{uuid.uuid4().hex[:12].upper()}"
 
         # Simulate payment processing delay
-        import asyncio
-
         await asyncio.sleep(0.5)
 
         logger.info(
@@ -60,15 +66,9 @@ async def process_payment(params: Dict[str, Any]) -> Dict[str, Any]:
             "amount": str(amount),
             "currency": currency,
             "status": "completed",
-            "processed_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "processed_at": datetime.now(timezone.utc).isoformat(),
         }
 
     except Exception as e:
         logger.error(f"❌ Payment failed for invoice {invoice_id}: {e}")
         raise PaymentProcessingError(f"Payment failed: {e}") from e
-
-
-class PaymentProcessingError(Exception):
-    """Custom exception for payment processing failures."""
-
-    pass

@@ -4,7 +4,7 @@ Core data structures used across the application.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum, auto
 from typing import Dict, List, Optional, Any
@@ -170,8 +170,8 @@ class TrustBattery:
     total_invoices: int = 0
     total_amount_paid: Decimal = field(default_factory=lambda: Decimal("0.00"))
     avg_invoice_amount: Decimal = field(default_factory=lambda: Decimal("0.00"))
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_payment_at: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -187,6 +187,9 @@ class TrustBattery:
             "avg_invoice_amount": str(self.avg_invoice_amount),
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            "last_payment_at": self.last_payment_at.isoformat()
+            if self.last_payment_at
+            else None,
         }
 
 
@@ -201,7 +204,7 @@ class InvoiceResult:
     vendor_trust_level: TrustLevel
     payment_amount: Optional[Decimal] = None
     payment_reference: Optional[str] = None
-    processed_at: datetime = field(default_factory=datetime.utcnow)
+    processed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     errors: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:

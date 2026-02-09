@@ -3,21 +3,17 @@ E2E test for full Invoice Processing Workflow (Step 3)
 Tests complete flow: Event -> Workflow -> Vision -> ML -> Decision
 """
 
-import sys
 import os
 import pytest
 import subprocess
 import time
 import signal
 
-# Add src to path
-sys.path.insert(0, "/home/aparna/Desktop/invoicify/python-worker/src")
-
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from workflows.invoice_processing import InvoiceProcessingWorkflow
-from activities.extract import extract_invoice_data
+from src.workflows.invoice_processing import InvoiceProcessingWorkflow
+from src.activities.extract import extract_invoice_data
 from activities.anomaly import (
     AnomalyDetector,
     detect_anomaly_activity,

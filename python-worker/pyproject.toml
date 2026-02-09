@@ -5,6 +5,10 @@ description = "Temporal Python worker for invoice processing with Docling docume
 authors = ["Nivi AI <team@nivi.ai>"]
 readme = "README.md"
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+
 [tool.poetry.dependencies]
 python = "^3.11"
 temporalio = "^1.20.0"

@@ -4,7 +4,7 @@ Manages vendor trust levels with automatic progression/regression.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional, Dict, List
 
@@ -137,9 +137,9 @@ class TrustBatteryService:
             battery = await self._handle_manual_rejection(battery)
 
         # Update timestamps
-        battery.updated_at = datetime.utcnow()
+        battery.updated_at = datetime.now(timezone.utc)
         if outcome == TrustOutcome.PAYMENT_SUCCESS:
-            battery.last_payment_at = datetime.utcnow()
+            battery.last_payment_at = datetime.now(timezone.utc)
 
         # Save to database
         await self._save_to_db(battery)
@@ -272,7 +272,7 @@ class TrustBatteryService:
         if not battery.last_payment_at:
             return battery
 
-        days_since_payment = (datetime.utcnow() - battery.last_payment_at).days
+        days_since_payment = (datetime.now(timezone.utc) - battery.last_payment_at).days
 
         if days_since_payment > self.INACTIVITY_THRESHOLD_DAYS:
             # Drop one level (but not below LIMITED)

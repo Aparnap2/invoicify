@@ -3,15 +3,11 @@ Unit tests for Event Producer (TDD - Step 2)
 Fixed: CodeRabbit review issues - proper mocking, resource cleanup
 """
 
-import sys
-
-sys.path.insert(0, "/home/aparna/Desktop/invoicify/python-worker/src")
-
 import pytest
 from unittest.mock import Mock, patch, AsyncMock, MagicMock
 import json
 
-from lib.events import EventProducer
+from src.lib.events import EventProducer
 
 
 class TestEventProducer:
