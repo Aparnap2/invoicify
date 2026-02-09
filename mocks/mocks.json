@@ -1,0 +1,57 @@
+{
+  "uuid": "nivi-mock",
+  "name": "Nivi API Mocks",
+  "endpointPrefix": "",
+  "port": 3000,
+  "routes": [
+    {
+      "uuid": "health-check",
+      "method": "get",
+      "endpoint": "health",
+      "responses": [
+        {
+          "uuid": "health-ok",
+          "body": "{\"status\": \"ok\"}",
+          "latency": 10,
+          "statusCode": 200
+        }
+      ]
+    },
+    {
+      "uuid": "extract-invoice",
+      "method": "post",
+      "endpoint": "extract",
+      "responses": [
+        {
+          "uuid": "extract-success",
+          "label": "Extract Invoice",
+          "body": "{\n  \"vendor\": \"Acme Corporation\",\n  \"vendor_name\": \"Acme Corporation\",\n  \"amount\": 500.00,\n  \"total_amount\": 500.00,\n  \"date\": \"2025-01-01\",\n  \"due_date\": \"2025-01-01\",\n  \"invoice_number\": \"INV-2025-001\",\n  \"currency\": \"USD\",\n  \"confidence\": 0.95\n}",
+          "latency": 200,
+          "statusCode": 200,
+          "rules": [
+            {
+              "target": "body",
+              "modifier": "",
+              "value": "url",
+              "operator": "contains",
+              "invert": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "uuid": "groq-chat",
+      "method": "post",
+      "endpoint": "openai/v1/chat/completions",
+      "responses": [
+        {
+          "uuid": "groq-success",
+          "body": "{\n  \"id\": \"chatcmpl-mock\",\n  \"object\": \"chat.completion\",\n  \"created\": 1700000000,\n  \"model\": \"llama-3.2-90b-vision-preview\",\n  \"choices\": [{\n    \"index\": 0,\n    \"message\": {\n      \"role\": \"assistant\",\n      \"content\": \"{\\\"vendor_name\\\": \\\"Acme Corporation\\\", \\\"total_amount\\\": 500.00, \\\"invoice_number\\\": \\\"INV-2025-001\\\", \\\"due_date\\\": \\\"2025-01-01\\\", \\\"currency\\\": \\\"USD\\\"}\"\n    },\n    \"finish_reason\": \"stop\"\n  }]\n}",
+          "latency": 500,
+          "statusCode": 200
+        }
+      ]
+    }
+  ]
+}

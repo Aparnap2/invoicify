@@ -1,0 +1,194 @@
+version: '3.8'
+
+services:
+  # Mockoon for external API mocking (Groq, etc.)
+  mockoon:
+    image: mockoon/cli:latest
+    container_name: nivi-mockoon
+    command: ["--data", "/data/mocks.json", "--port", "3000"]
+    volumes:
+      - ./mocks:/data:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - nivi-test
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Temporal development server
+  temporal:
+    image: temporalio/auto-setup:latest
+    container_name: nivi-temporal
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgres
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+    ports:
+      - "7233:7233"    # gRPC
+      - "8233:8233"    # Web UI
+    networks:
+      - nivi-test
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "namespace", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # PostgreSQL for Temporal
+  temporal-postgres:
+    image: postgres:15-alpine
+    container_name: nivi-temporal-postgres
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    volumes:
+      - temporal-postgres-data:/var/lib/postgresql/data
+    networks:
+      - nivi-test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redpanda (Kafka-compatible)
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
+    container_name: nivi-redpanda
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+    ports:
+      - "19092:19092"
+      - "18082:18082"
+      - "18081:18081"
+      - "9644:9644"     # Admin API
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    networks:
+      - nivi-test
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redpanda Console (UI)
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v2.3.1
+    container_name: nivi-redpanda-console
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+    ports:
+      - "8080:8080"
+    networks:
+      - nivi-test
+    depends_on:
+      - redpanda
+
+  # Test runner service
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: nivi-test-runner
+    volumes:
+      - .:/app
+      - /app/temporal/__pycache__
+      - /app/ai/__pycache__
+      - /app/tests/__pycache__
+    environment:
+      - TEMPORAL_HOST=temporal:7233
+      - TEMPORAL_NAMESPACE=default
+      - REDPANDA_HOST=redpanda:9092
+      - MOCKOON_HOST=mockoon:3000
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - NEO4J_URI=bolt://host.docker.internal:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=founderos_secret
+      - QDRANT_URL=http://host.docker.internal:6333
+      - GROQ_API_KEY=test-key
+      - GROQ_BASE_URL=http://mockoon:3000/openai/v1
+      - PYTHONPATH=/app
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - PYTEST_CURRENT_TEST=1
+    networks:
+      - nivi-test
+    depends_on:
+      temporal:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      mockoon:
+        condition: service_healthy
+    command: ["pytest", "-v", "--tb=short", "--color=yes"]
+    stdin_open: true
+    tty: true
+
+  # IBM COS Local (MinIO for testing)
+  minio:
+    image: minio/minio:latest
+    container_name: nivi-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - nivi-test
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Create MinIO buckets on startup
+  minio-init:
+    image: minio/mc:latest
+    container_name: nivi-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc config host add local http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb local/nivi-lake-prod || true;
+      /usr/bin/mc mb local/nivi-warpstream || true;
+      /usr/bin/mc policy set public local/nivi-lake-prod;
+      exit 0;
+      "
+    networks:
+      - nivi-test
+
+networks:
+  nivi-test:
+    driver: bridge
+
+volumes:
+  temporal-postgres-data:
+  redpanda-data:
+  minio-data:

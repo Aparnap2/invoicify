@@ -1,0 +1,117 @@
+version: '3.8'
+
+services:
+  # Mockoon for API mocking
+  mockoon:
+    image: mockoon/cli:latest
+    container_name: nivi-mockoon
+    command: ["--data", "/data/mocks.json", "--port", "3000"]
+    volumes:
+      - ./mocks:/data:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - nivi-test
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Temporal development server
+  temporal:
+    image: temporalio/auto-setup:latest
+    container_name: nivi-temporal
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=temporal
+      - POSTGRES_SEEDS=temporal-postgres
+    ports:
+      - "7233:7233"
+      - "8233:8233"
+    networks:
+      - nivi-test
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+
+  # PostgreSQL for Temporal
+  temporal-postgres:
+    image: postgres:15-alpine
+    container_name: nivi-temporal-postgres
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    networks:
+      - nivi-test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redpanda (Kafka-compatible)
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.1
+    container_name: nivi-redpanda
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+    ports:
+      - "19092:19092"
+      - "18082:18082"
+    networks:
+      - nivi-test
+
+  # MinIO (IBM COS compatible for local testing)
+  minio:
+    image: minio/minio:latest
+    container_name: nivi-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - nivi-test
+
+  # Create MinIO buckets on startup
+  minio-init:
+    image: minio/mc:latest
+    container_name: nivi-minio-init
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      /usr/bin/mc config host add local http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb local/nivi-lake-prod || true;
+      /usr/bin/mc mb local/nivi-warpstream || true;
+      /usr/bin/mc policy set public local/nivi-lake-prod;
+      exit 0;
+      "
+    networks:
+      - nivi-test
+
+networks:
+  nivi-test:
+    driver: bridge
+
+volumes:
+  minio-data:
