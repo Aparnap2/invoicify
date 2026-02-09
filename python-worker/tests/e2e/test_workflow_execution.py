@@ -11,16 +11,16 @@ from unittest.mock import patch, AsyncMock
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from python_worker.src.workflows.invoice_processing import InvoiceProcessingWorkflow
-from python_worker.src.activities.extract import extract_invoice_data, VisionAPIError
-from python_worker.src.activities.anomaly import AnomalyDetector
+from src.workflows.invoice_processing import InvoiceProcessingWorkflow
+from src.activities.extract import extract_invoice_data, VisionAPIError
+from src.activities.anomaly import AnomalyDetector
 
 
 class TestInvoiceProcessingWorkflow:
     """E2E tests for invoice processing workflow."""
 
     @pytest.fixture(scope="class")
-    async def env():
+    async def env(self):
         """Create test environment."""
         async with await WorkflowEnvironment.start_time_skipping() as e:
             yield e

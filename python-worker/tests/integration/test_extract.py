@@ -7,7 +7,7 @@ import pytest
 from unittest.mock import patch, Mock
 import httpx
 
-from python_worker.src.activities.extract import (
+from src.activities.extract import (
     extract_invoice_data,
     VisionAPIError,
     InvoiceExtractionResult,

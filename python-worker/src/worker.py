@@ -9,12 +9,12 @@ import os
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from python_worker.src.workflows.invoice_processing import (
+from src.workflows.invoice_processing import (
     InvoiceProcessingWorkflow,
     emit_invoice_processed_event,
 )
-from python_worker.src.activities.extract import extract_invoice_data
-from python_worker.src.activities.anomaly import AnomalyDetector
+from src.activities.extract import extract_invoice_data
+from src.activities.anomaly import AnomalyDetector
 
 # Configure logging
 logging.basicConfig(
