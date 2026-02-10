@@ -1,1739 +1,819 @@
-Below is a **complete, self-contained, production-grade blueprint for *Invoicify* only**.
-This is written as if you were handing it to **your future self, a co-founder, or an investor**.
-No fluff. No generic SaaS nonsense. This is a **vertical, proactive, context-aware agentic AI system that replaces a junior accountant/AP role**, not an “invoice OCR tool”.
+# INVOICIFY: Complete Production Architecture & Implementation Specification
 
----
+## EXECUTIVE SUMMARY
 
-# INVOICIFY
+**Invoicify** is an autonomous Accounts Payable (AP) agent that replaces the "AP Intern" role by owning the complete invoice lifecycle: ingestion → extraction → risk assessment → decision → execution → reconciliation → learning.
 
-**Proactive Finance Ops AI Intern for Seed–Series A Startups**
+**Core Value Proposition:** Prevent cash bleed through intelligent automation while maintaining founder-level control over financial decisions through adaptive trust levels and explainable AI.
 
----
+**Current Architecture (DigitalOcean Stack):**
+- **Ingress:** Cloudflare Worker (Edge)
+- **Event Bus:** WarpStream (Kafka-compatible)
+- **Compute:** Python Worker (Docker) on DigitalOcean Droplet
+- **Orchestrator:** Temporal Cloud (Durable Workflows)
+- **Storage:** DigitalOcean Spaces (S3-compatible)
+- **Database:** Supabase (Postgres, Free Tier)
+- **AI (Vision):** IBM Docling (local) + IBM Granite 13B (Watsonx API)
+- **AI (ML):** River (Online Anomaly Detection)
+- **Integrations:** QuickBooks Online, Salesforce (Read-Only)
 
-## 0. One-line Definition (Lock This)
+------
 
-> **Invoicify is a proactive, context-aware finance operations agent that autonomously manages invoices, payables, vendor risk, and cash-runway decisions with human-in-the-loop controls.**
+## 1. PRODUCT REQUIREMENTS DOCUMENT (PRD)
 
-Not:
+## 1.1 Problem Statement
 
-* ❌ Invoice OCR
-* ❌ Accounting dashboard
-* ❌ Simple automation
+Startups die from cash mismanagement. Founders manually review every invoice, leading to:
 
----
+- Late payment fees from attention overload
+- Duplicate payments from poor tracking
+- Runway blindness (paying bills without checking cash position)
+- Vendor relationship damage from payment delays
 
-## 1. ICP (Locked)
+## 1.2 User Personas
 
-**Primary ICP**
+**Primary: The Founder (Survival Mode)**
 
-* Technical founders (Seed → Series A)
-* 5–50 employees
-* No full-time finance team or only 1 finance generalist
+- Needs: "Don't let me run out of cash"
+- Pain: "I spend 2 hours/week on invoices"
+- Success: "I only see alerts when something is wrong"
 
-**Environment**
+**Secondary: Finance Manager (Growth Mode)**
 
-* SaaS / software startups
-* Stripe + bank + accounting software
-* Founder cares about runway, not bookkeeping
+- Needs: Audit trail and policy enforcement
+- Pain: Manual vendor verification across systems
+- Success: "The agent handles 80% autonomously"
 
-**Pain Reality**
+## 1.3 Functional Requirements
 
-* Invoices arrive everywhere
-* Payments are reactive
-* Founder only notices problems when cash is low or vendor complains
-* No real-time “financial awareness”
+| ID    | Requirement                                          | Priority | Acceptance Criteria                                  |
+| :---- | :--------------------------------------------------- | :------- | :--------------------------------------------------- |
+| FR-1  | Multi-channel invoice ingestion (Gmail, API, Upload) | P0       | System processes invoices from any source within 30s |
+| FR-2  | Structured data extraction from PDF/images           | P0       | 95% field accuracy on standard invoices              |
+| FR-3  | Duplicate detection across vendors                   | P0       | Zero duplicate payments in production                |
+| FR-4  | Vendor contract verification via CRM                 | P1       | Block payments to non-contracted vendors             |
+| FR-5  | Real-time anomaly detection                          | P1       | Flag 3σ deviations within 5s                         |
+| FR-6  | Adaptive trust levels per vendor                     | P1       | Auto-approve thresholds adjust based on accuracy     |
+| FR-7  | ERP synchronization (QuickBooks)                     | P0       | Bills created within 10s of approval                 |
+| FR-8  | Human-in-the-loop for high-risk decisions            | P0       | No financial action without approval when Risk > 0.6 |
+| FR-9  | Full audit trail with reasoning                      | P0       | Every decision has explainable signals               |
+| FR-10 | Payment execution via Stripe                         | P1       | Scheduled payments execute on time 99.9%             |
 
----
+## 1.4 Non-Functional Requirements
 
-## 2. Core Problem Statement (Truth)
+**Performance:**
 
-> Founders don’t want to *process invoices*.
-> They want to **never think about invoices until something matters**.
+- End-to-end processing: <30s (P95)
+- Ingestion response time: <200ms
+- Cold start tolerance: <60s (acceptable due to async design)
 
-Existing tools:
+**Reliability:**
 
-* Digitize invoices ❌
-* Require manual review ❌
-* Are reactive ❌
-* Don’t understand runway ❌
+- Uptime: 99.5% (excluding scheduled maintenance)
+- Data durability: 99.999999999% (leveraging COS)
+- Zero data loss on system crashes (Temporal guarantees)
 
----
+**Security:**
 
-## 3. Product Goals (Non-Negotiable)
+- All secrets stored in IBM Secrets Manager
+- OAuth 2.0 for external integrations
+- Encryption at rest (COS) and in transit (TLS 1.3)
+- PII redaction in logs
 
-1. **Proactive** – acts without prompts
-2. **Context-aware** – reasons over cash, vendors, history
-3. **Role-replacing** – behaves like a junior accountant
-4. **Safe** – HITL for risky decisions
-5. **Explainable** – every action is auditable
+**Scalability:**
 
----
+- Handle 10,000 invoices/month on free tier
+- Horizontal scaling to 100K+ with paid tier
 
-## 4. Scope Boundaries (Very Important)
+------
 
-### In Scope
+## 2. HIGH-LEVEL DESIGN (HLD)
 
-* Accounts Payable (AP)
-* Vendor payments
-* Cash runway awareness
-* Exception detection
-* Approval routing
-* **Cash Reconciliation (Mandatory)**
-* Audit trail
-* Learning loop for vendor trust
+## 2.1 Architecture Principles
 
-### Explicitly Out of Scope (v1)
+**Event-Driven:** Decouple ingestion from processing using WarpStream as the buffer.
 
-* Payroll
-* Tax filing
-* Revenue recognition
-* Full ERP replacement
-* CFO analytics
+**Hexagonal Architecture:** Business logic is isolated from infrastructure via adapters.
 
----
+**CAP Theorem Position:**
 
-### Why Cash Reconciliation is Mandatory
+- **AP** (Availability + Partition Tolerance) for Ingestion Layer
+- **CP** (Consistency + Partition Tolerance) for Ledger Writes
 
-The role is **not finished** when the payment is scheduled. The agent must:
-1. Monitor the bank feed
-2. Match the transaction to scheduled payments
-3. Mark as "Reconciled" in the ERP
-4. **Alert immediately** if no match is found for significant outflows
+**ACID Compliance:**
 
-Without this, the founder still performs **50% of the manual labor**.
+- Temporal guarantees atomicity for multi-step workflows
+- Idempotency keys prevent duplicate payments
 
----
-
-## 5. Feature List (Grouped by Agent Capability)
-
-### A. Perception (Input Layer)
-
-* Email inbox monitoring ([AP@company.com](mailto:AP@company.com))
-* PDF / image invoice ingestion
-* Vendor portal polling (future)
-* Manual upload (fallback)
-
----
-
-### B. Understanding (Context Layer)
-
-* Invoice field extraction
-* Vendor identification & history
-* Contract & payment terms awareness
-* Budget category mapping
-* Cash runway snapshot
-* Historical payment behavior
-
-#### The Brain Upgrades (v1.1)
-
-##### 1. Strategic Mode Switch
-A global state variable that shifts the Agent's reasoning:
-
-| Mode | Behavior | Priority |
-|------|----------|----------|
-| **SURVIVAL** | Conserve cash, delay non-essential payments | Float over speed |
-| **GROWTH** | Pay fast, build vendor trust, capture early-payment discounts | Speed over float |
-| **OPTIMIZE** | Balanced reasoning, capture discounts when free | Trade-off optimization |
-
-```typescript
-const StrategyMode = {
-  SURVIVAL: "SURVIVAL",   // Conserve cash
-  GROWTH: "GROWTH",       // Pay fast
-  OPTIMIZE: "OPTIMIZE",   // Balance
-} as const;
-```
-
-##### 2. Semantic Contract Matching
-Using **pgvector** embeddings to verify invoice line items against signed PDF contract terms:
-- Extract key clauses from signed contracts (embeddings)
-- Embed invoice line items
-- Calculate cosine similarity to detect "surprise" charges (e.g., "Overage Fees" not in contract)
-
-##### 3. Zombie Detection (Aspirational V2)
-Integration with SSO/HRIS data to flag payments for software with zero active users:
-- Query identity provider for active user counts per vendor
-- Flag subscriptions with $0 active users for review
-- Prevent "zombie" vendor payments
-
----
-
-### C. Reasoning (Agent Brain)
-
-* Is this invoice normal?
-* Is this vendor trusted?
-* Can we pay now without harming runway?
-* Is this duplicate/fraud/anomaly?
-* Should this be escalated?
-
----
-
-### D. Action (Execution Layer)
-
-* Auto-approve low-risk invoices
-* Schedule payments
-* Route approvals
-* Delay payments strategically
-* Notify founder only when needed
-
----
-
-### E. Learning (Memory Loop)
-
-* Learn from approvals/rejections
-* Learn vendor behavior
-* Improve confidence thresholds
-* Reduce HITL over time
-
----
-
-## 6. System Architecture (Detailed)
-
-### High-Level Architecture
+## 2.2 System Context Diagram (ASCII)
 
 ```
-[ Email / Upload / API ]
-          ↓
-[ Ingestion Service ]
-          ↓
-[ LangGraph Agent Orchestrator ]
-          ↓
- ┌───────────────────────────────────────┐
- │ Context Layer                         │
- │  - Postgres + pgvector               │
- │  - Redis / Valkey                    │
- │  - Neo4j + Graphiti                  │
- └───────────────────────────────────────┘
-          ↓
-[ Decision + HITL Gates ]
-          ↓
-[ Execution Workers ]
-          ↓
-[ ERP / Bank / Notifications ]
+text┌─────────────────────────────────────────────────────────────┐
+│                    EXTERNAL SYSTEMS                          │
+│                                                              │
+│  [Gmail API]  [Salesforce]  [QuickBooks]  [Stripe]          │
+│      ↓             ↓             ↓             ↓             │
+└──────┬─────────────┬─────────────┬─────────────┬────────────┘
+       │             │             │             │
+┌──────▼─────────────▼─────────────▼─────────────▼────────────┐
+│              INVOICIFY PLATFORM                              │
+│                                                              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │   EDGE       │───▶│  EVENT BUS   │───▶│   COMPUTE    │  │
+│  │ (Cloudflare) │    │ (WarpStream) │    │ (Code Engine)│  │
+│  └──────────────┘    └──────────────┘    └───────┬──────┘  │
+│                                                   │          │
+│  ┌────────────────────────────────────────────────▼──────┐  │
+│  │             DATA & KNOWLEDGE LAYER                    │  │
+│  │  [Postgres] [Qdrant] [Neo4j] [IBM COS]               │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
----
+## 2.3 Component Responsibilities
 
-## 7. Agent Architecture (LangGraph)
+**Edge Layer (Cloudflare Workers):**
 
-### Agent Pattern Used
+- JWT authentication
+- Rate limiting (1000 req/min per user)
+- File upload to COS
+- Event publishing to WarpStream
 
-* **Hierarchical Agent**
-* **ReAct reasoning**
-* **Plan → Execute**
-* **Human-in-the-Loop nodes**
+**Event Bus (WarpStream):**
 
-### Why Not Swarm?
+- Persistent event queue (7-day retention)
+- Backpressure management
+- Exactly-once delivery semantics
 
-Finance decisions require **consistency + auditability**, not creative divergence.
+**Compute Layer (DigitalOcean Droplet):**
 
----
+- Temporal Worker (orchestration)
+- IBM Docling (local OCR)
+- IBM Granite 13B (via Watsonx.ai API)
+- River ML (anomaly detection)
+- Integration adapters (Salesforce, QBO, Qdrant)
+- Gmail Poller (Cron Schedule)
 
-### LangGraph Node Graph (Conceptual - Legacy Linear Flow)
+**Data Layer:**
 
-```
-START → Ingest → Extract → Context → Risk → Decision → Execute → Reconcile → END
-```
+- **Postgres (Supabase):** Source of truth for invoices, vendors, trust battery
+- **Qdrant:** Vector embeddings for semantic search
+- **DigitalOcean Spaces:** Raw PDFs and ML model state
 
----
+------
 
-## 7A. Analyst-Critic Pattern (Production-Grade)
+## 3. LOW-LEVEL DESIGN (LLD)
 
-We are moving from a **linear graph** to a **Review-Critique Loop**. The Analyst proposes; the Critic audits.
+## 3.1 Code Architecture (SOLID Principles)
 
-### The Autonomous Brain Architecture
-
-```mermaid
-graph TD
-    Start[START] --> Ingest[INGEST]
-    Ingest --> Extract[EXTRACT]
-    Extract --> ContextFetch[CONTEXT]
-
-    subgraph "The Autonomous Brain"
-        ContextFetch --> AnalystNode[Analyst: Draft Decision]
-        AnalystNode --> CriticNode[Critic: Auditor]
-        CriticNode -->|Anomaly/Risk Detected| HITL[Human-in-the-Loop]
-        CriticNode -->|Safety Check Passed| Execute[Execution Worker]
-    end
-
-    Execute --> Reconcile[Reconciliation Agent]
-    Reconcile --> End[END]
-```
-
-### Analyst Node (Proposer)
-- **Role:** Pattern recognition and historical analysis
-- **Inputs:** Invoice data, vendor history, budget context
-- **Outputs:** Proposed action with confidence score
-- **Proposals:** `AUTO_APPROVE`, `HITL_REQUIRED`, `DELAY_PAYMENT`, `REJECT`
-
-### Critic Node (Auditor) - **The Safety Layer**
-- **Role:** Safety checks using Priority Matrix
-- **Priority Order (Non-Negotiable):**
-
-| Priority | Check | Action if Failed |
-|----------|-------|------------------|
-| 1 | **RUNWAY** | Block if runway < safety threshold |
-| 2 | **STRATEGY** | Enforce mode-specific rules (SURVIVAL/ GROWTH/ OPTIMIZE) |
-| 3 | **CONTRACT** | Flag if payment terms violated |
-| 4 | **TRUST** | Apply auto-approve thresholds |
-| 5 | **BUDGET** | Verify category limits |
-
-### Why This Pattern?
-1. **Separation of Concerns** - Analyst is creative; Critic is conservative
-2. **Auditability** - Every decision has a "why"
-3. **Safety** - Critical checks run last, always
-4. **Learning** - Critic's rejections become training data
-
-### Output Format
-```typescript
-interface DecisionSignal {
-  type: "RUNWAY" | "STRATEGY" | "CONTRACT" | "TRUST" | "BUDGET";
-  severity: "CRITICAL" | "WARNING" | "INFO";
-  message: string;
-  recommendation: string;
-}
-```
-
----
-
-## 7B. Trust Battery System (Implemented)
-
-Gradual agent autonomy based on demonstrated accuracy.
-
-### Trust Levels
-| Level | Name | Consecutive Accurate | Auto-Approve Threshold |
-|-------|------|---------------------|------------------------|
-| 1 | Probation | 0-50 | $0 (review all) |
-| 2 | Standard | 50-100 | $500 |
-| 3 | Core | 100+ | $5,000 |
-
-### Behavior
-- **Accurate decision**: Consecutive accurate count +1, trust level may promote
-- **Error made**: Consecutive errors +1, consecutive accurate resets to 0
-- **5 consecutive errors**: Trust level demotes by 1
-- **Accuracy rate**: Calculated from all-time decisions
-
-### Trust Battery Table Schema
-```sql
-CREATE TABLE trust_battery (
-    id UUID PRIMARY KEY,
-    vendor_id UUID NOT NULL,
-    consecutive_accurate INTEGER DEFAULT 0,
-    consecutive_errors INTEGER DEFAULT 0,
-    total_decisions INTEGER DEFAULT 0,
-    accurate_decisions INTEGER DEFAULT 0,
-    trust_level INTEGER DEFAULT 3,  -- 1=Probation, 2=Standard, 3=Core
-    auto_approve_threshold DECIMAL(10,2) DEFAULT 500,
-    last_decision_at TIMESTAMP,
-    updated_at TIMESTAMP
-);
-```
-
-### Calibration Report
-Tracks agent performance for shadow mode:
-- Total decisions vs verified decisions
-- Recent accuracy (last 50 decisions)
-- Recommendations for threshold adjustment
-
----
-
-## 7C. FinancialContext Object (Implemented)
-
-Provides the agent with real-time company financial state.
-
-```typescript
-interface FinancialContext {
-  currentCash: number;              // Current bank balance
-  monthlyBurnRate: number;          // Avg monthly spending
-  runwayDays: number;               // Days of runway remaining
-  payrollDate: string | null;       // Day of month (e.g., "15")
-  payrollAmount: number;            // Upcoming payroll amount
-  safetyBuffer: number;             // Minimum cash to maintain
-  strategyMode: "SURVIVAL" | "GROWTH" | "OPTIMIZE";
-  autoApproveThreshold: number;     // Global auto-approve limit
-  budgets: BudgetCategory[];        // Category spending limits
-  trustLevel: 1 | 2 | 3;            // Agent's trust level
-  consecutiveAccuracy: number;      // Consecutive accurate decisions
-  pendingPaymentsThisMonth: number; // Scheduled payments
-  categorySpending: Record<string, number>;  // YTD spending by category
-}
-
-interface BudgetCategory {
-  category: string;           // e.g., "Software", "G&A"
-  monthlyLimit: number;       // Max spend per month
-  softCapAlert: boolean;      // Alert at 80% of limit
-}
-```
-
-### Strategy Modes
-| Mode | Behavior |
-|------|----------|
-| **SURVIVAL** | Conserve cash, delay non-essential payments |
-| **GROWTH** | Pay fast, build vendor trust and early payment discounts |
-| **OPTIMIZE** | Balance between cash conservation and vendor relationships |
-
----
-
-## 7D. Decision Signals (Implemented)
-
-Every decision produces explainable signals for audit and transparency.
-
-```typescript
-interface DecisionSignal {
-  type: "RUNWAY" | "STRATEGY" | "CONTRACT" | "TRUST" | "BUDGET" | "DUPLICATE" | "FRAUD";
-  severity: "CRITICAL" | "WARNING" | "INFO";
-  message: string;           // Human-readable explanation
-  recommendation: string;    // Suggested action
-  scoreContribution?: number; // Risk score contribution (0-1)
-}
-
-interface ReasoningStep {
-  node: string;              // Which node produced this
-  decision: string;          // The decision made
-  reasoning: string[];       // Step-by-step reasoning
-  signals: DecisionSignal[]; // Supporting signals
-}
-```
-
-### Example Output
-```json
-{
-  "decision": "HITL_REQUIRED",
-  "reasoning": [
-    "Invoice amount $3,200 is within trust threshold",
-    "Vendor trust level: CORE (consecutive accurate: 127)",
-    "RUNWAY WARNING: Payment reduces runway to 4.2 months",
-    "Payroll of $15,000 due in 3 days"
-  ],
-  "signals": [
-    {
-      "type": "RUNWAY",
-      "severity": "WARNING",
-      "message": "Payment would reduce runway below 5 months",
-      "recommendation": "Delay until after payroll"
-    }
-  ]
-}
-```
-
----
-
-## 7E. Updated Process Map (Implemented)
+**S - Single Responsibility:**
 
 ```
-[Invoice Arrival]
-        ↓
-[INGEST] - Store raw, create invoice record
-        ↓
-[EXTRACT] - OCR + field extraction, confidence scoring
-        ↓
-[CONTEXT] - Load FinancialContext, vendor history, budget status
-        ↓
-[RISK] - Calculate risk score (formula below)
-        ↓
-[ANALYST] - Propose action based on patterns
-   │     - Check for duplicates/anomalies
-   │     - Consider vendor payment preferences
-   ↓
-[CRITIC] - Priority Matrix Review
-   │     1. RUNWAY: Safe to pay now?
-   │     2. STRATEGY: Aligns with mode?
-   │     3. CONTRACT: Terms violated?
-   │     4. TRUST: Within auto-approve threshold?
-   │     5. BUDGET: Within category limits?
-   ↓
-[ROUTE]
-   ├─ AUTO_APPROVE → [POST_LEDGER] → [SCHEDULE_PAYMENT]
-   ├─ HITL_REQUIRED → [HUMAN_REVIEW]
-   │     ├─ Approved → [POST_LEDGER] → [SCHEDULE_PAYMENT]
-   │     ├─ Rejected → [REJECT]
-   │     └─ Delayed → [RESCHEDULE]
-   └─ REJECT → [REJECT]
-        ↓
-[LEARN] - Record decision, update trust battery
-        ↓
-[RECONCILE] - Monitor bank feed, match transactions, mark as reconciled
-        ↓
-[END]
+python# ✅ Each class has one reason to change
+class DoclingExtractor:
+    def extract_layout(self, pdf_path: str) -> Markdown: ...
+
+class GraniteSemanticParser:
+    def parse_to_json(self, markdown: str) -> Invoice: ...
 ```
 
-### The Complete Invoice Lifecycle
+**O - Open/Closed:**
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         INVOICIFY AGENT LIFECYCLE                         │
-├──────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  [INVOICE]                                                                │
-│      ↓                                                                   │
-│  [INGEST] ────── Store raw, create record                                │
-│      ↓                                                                   │
-│  [EXTRACT] ───── OCR, field extraction, confidence score                 │
-│      ↓                                                                   │
-│  [CONTEXT] ──── Load FinancialContext, vendor history                    │
-│      ↓                                                                   │
-│  [RISK] ──────── Calculate risk score (formula)                          │
-│      ↓                                                                   │
-│  ┌────────────────────────────────────────────────────────────────────┐  │
-│  │                    THE AUTONOMOUS BRAIN                            │  │
-│  │                                                                    │  │
-│  │   [ANALYST] ──── Propose action based on patterns                  │  │
-│  │        ↓                                                          │  │
-│  │   [CRITIC] ───── Safety checks (Priority Matrix)                   │  │
-│  │        │         1. RUNWAY → 2. STRATEGY → 3. CONTRACT            │  │
-│  │        │         4. TRUST → 5. BUDGET                              │  │
-│  │        ↓                                                          │  │
-│  └────────────────────────────────────────────────────────────────────┘  │
-│      ↓                                                                   │
-│  [ROUTE]                                                                  │
-│      ├─ LOW RISK ──→ [AUTO_APPROVE]                                      │
-│      ├─ MEDIUM ───→ [HITL_REVIEW]                                        │
-│      └─ HIGH ─────→ [ESCALATE]                                           │
-│      ↓                                                                   │
-│  [POST_LEDGER] ─── Record in ERP                                         │
-│      ↓                                                                   │
-│  [SCHEDULE_PAYMENT] ── Set payment date                                  │
-│      ↓                                                                   │
-│  [RECONCILE] ────── Monitor bank → Match transaction → Mark complete    │
-│      ↓                                                                   │
-│  [LEARN] ────────── Update trust battery, calibration                    │
-│      ↓                                                                   │
-│  [END]                                                                    │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
+python# ✅ New adapters can be added without modifying existing code
+class VisionAdapter(ABC):
+    @abstractmethod
+    async def extract_invoice(self, file: bytes) -> Invoice: ...
+
+# New provider? Just implement the interface
+class WatsonVisionAdapter(VisionAdapter): ...
 ```
 
-### Risk Scoring Formula (Implemented)
-```typescript
-const RISK_WEIGHTS = {
-  amount: 0.30,
-  duplicate: 0.25,
-  trust: 0.20,
-  runway: 0.15,
-  newVendor: 0.10,
-};
-
-function calculateRiskScore(inputs: RiskInputs): {
-  score: number;        // 0-1
-  signals: DecisionSignal[];
-} {
-  const score =
-    RISK_WEIGHTS.amount * inputs.amountDeviation +
-    RISK_WEIGHTS.duplicate * inputs.duplicateScore +
-    RISK_WEIGHTS.trust * (1 - inputs.vendorTrust) +
-    RISK_WEIGHTS.runway * inputs.runwayPressure +
-    RISK_WEIGHTS.newVendor * (inputs.isNewVendor ? 1 : 0);
-
-  return { score, signals: inputs.signals };
-}
-```
-
-### HITL Thresholds (Configurable)
-| Risk Score | Action |
-|------------|--------|
-| < 0.3 | Auto-approve (if trust level allows) |
-| 0.3 - 0.6 | HITL review |
-| > 0.6 | Escalate / Block |
-
----
-
-## 7F. Updated KPIs (Implemented)
-
-### Operational
-| Metric | Target | Description |
-|--------|--------|-------------|
-| Auto-approval rate | >60% | % invoices auto-approved |
-| HITL rate | <40% | Requires human review |
-| Processing time | <30s | End-to-end invoice processing |
-| Accuracy rate | >95% | Agent decisions matching human |
-
-### Trust Battery Metrics
-| Metric | Target | Description |
-|--------|--------|-------------|
-| Core vendors | >50% | Vendors at trust level 3 |
-| Promotion rate | >10%/month | Vendors moving up levels |
-| Demotion rate | <5%/month | Vendors moving down levels |
-| False positive rate | <10% | Unnecessary escalations |
-
-### Business Impact
-| Metric | Target | Description |
-|--------|--------|-------------|
-| Late fees avoided | 100% | Zero late payments |
-| Duplicate prevention | 100% | Zero duplicate payments |
-| Runway alerts | >80% accuracy | True positive rate |
-
-### Learning Loop
-| Metric | Target | Description |
-|--------|--------|-------------|
-| Feedback loop time | <24h | Human decision → trust update |
-| Threshold calibration | Monthly | Auto-adjust based on accuracy |
-| Pattern detection | >5 patterns/month | Identified vendor behaviors |
-
----
-
-## 8. The Context Layer (The "Founder's Memory")
-
-This is what makes Invoicify intelligent, not just automated. It gives the agent a "temporal memory" of company context so the founder doesn't have to context-switch to explain "why this is OK (or not) this time."
-
-### 8A. Temporal Knowledge Graph (Neo4j + Graphiti)
-
-Graphiti is the "Hippocampus" of the agent. It stores "Episodes" of business interactions, allowing the agent to reason about changes over time.
-
-**Graph Model:**
-
-```typescript
-// Nodes
-Vendor { id, name, category }
-Invoice { id, number, amount, status }
-Contract { id, terms, active_period }
-Policy { id, name, rules, valid_from, valid_to }
-Person { id, role, approver_level }
-
-// Edges (Time-Aware via Graphiti)
-(:Vendor)-[:TRUST_STATUS {level: 'PROBATION', valid_from: '2025-01-01', valid_to: '2025-02-01'}]->(:Company)
-(:Vendor)-[:TRUST_STATUS {level: 'TRUSTED', valid_from: '2025-02-02'}]->(:Company)
-(:Vendor)-[:VIOLATED_TERM {severity: 'HIGH', episode_id: 'xxx'}]->(:Contract)
-(:Invoice)-[:BELONGS_TO_EPISODE {reason: 'Series A Demo'}]->(:Episode)
-```
-
-**Episodic Memory Examples:**
-
-* "Jan 1st: Founder put vendor 'Acme' on probation due to bad service"
-* "Jan 12th: Founder overrode probation to pay Acme"
-* "Last month you rejected this vendor due to quality - has this been resolved?"
-
-**Query Examples:**
-
-```python
-# "What happened with this vendor last month?"
-results = graphiti.search(
-    "AWS overage approval history",
-    filter_by_time="last_6_months"
-)
-# Returns: "On Jan 12, Founder approved AWS overage due to 'Staging Demo'."
-```
-
-### 8B. Semantic Memory (Postgres + pgvector)
-
-Stores embeddings of invoices, contracts, and approval rationales for similarity search.
-
-**Tables:**
-
-```sql
--- Invoices with embeddings
-CREATE TABLE invoices (
-    id UUID PRIMARY KEY,
-    vendor_id UUID,
-    status TEXT,
-    embedding vector(1536),  -- OpenAI text-embedding-3-small
-    risk_score FLOAT,
-    extracted_text TEXT,
-    created_at TIMESTAMP
-);
-
--- Episodes (Graphiti sync)
-CREATE TABLE episodes (
-    id UUID PRIMARY KEY,
-    content TEXT,
-    embedding vector(1536),
-    timestamp TIMESTAMP,
-    vendor_id UUID,
-    invoice_id UUID
-);
-```
-
-**Used for:**
-
-* "Is this similar to previous invoices?"
-* "Have we seen this pattern before?"
-* Contract similarity search
-
-### 8C. Source of Truth (Postgres)
-
-```sql
-CREATE TABLE vendors (
-    id UUID PRIMARY KEY,
-    name TEXT UNIQUE,
-    category TEXT,
-    trust_level INTEGER DEFAULT 1,  -- 1=Probation, 2=Standard, 3=Core
-    auto_approve_threshold DECIMAL(10,2) DEFAULT 0,
-    consecutive_accurate INTEGER DEFAULT 0,
-    consecutive_errors INTEGER DEFAULT 0
-);
-
-CREATE TABLE invoices (
-    id UUID PRIMARY KEY,
-    vendor_id UUID,
-    invoice_number TEXT,
-    amount DECIMAL(10,2),
-    status TEXT,  -- 'RECEIVED', 'HITL', 'APPROVED', 'PAID', 'RECONCILED'
-    risk_score FLOAT,
-    analyst_proposal TEXT,
-    critic_decision TEXT,
-    stripe_payout_id TEXT,
-    qbo_bill_id TEXT,
-    policy_version_at_decision TEXT
-);
-
-CREATE TABLE payments (
-    id UUID PRIMARY KEY,
-    invoice_id UUID,
-    amount DECIMAL(10,2),
-    scheduled_date DATE,
-    stripe_payout_id TEXT,
-    status TEXT  -- 'SCHEDULED', 'CLEARED', 'RECONCILED'
-);
-
-CREATE TABLE audit_logs (
-    id UUID PRIMARY KEY,
-    episode_id UUID,
-    action TEXT,
-    rationale TEXT,
-    actor TEXT,  -- 'AGENT' or 'HUMAN'
-    timestamp TIMESTAMP
-);
-```
-
-### 8D. Redis (Agent State)
-
-* Agent state cache for workflow checkpoints
-* HITL queues with TTL
-* Idempotency keys (prevent double payments)
-* Rate limiting per vendor
-
----
-
-## 9. SOPs (Standard Operating Procedures)
-
-### SOP-FIN-001: Invoice Lifecycle
+**L - Liskov Substitution:**
 
 ```
-Invoice Received
-→ Parsed
-→ Context Loaded
-→ Risk Scored
-→ Action Taken
-→ Logged
-→ Learned
+python# ✅ Any ERPAdapter can replace another without breaking workflow
+def sync_to_erp(adapter: ERPAdapter, invoice: Invoice):
+    adapter.create_bill(invoice)  # Works for QBO, Xero, SAP...
 ```
 
----
-
-### SOP-FIN-002: Risk Scoring
-
-Inputs:
-
-* Vendor trust score
-* Amount deviation
-* Timing vs runway
-* Duplicate likelihood
-
-Outputs:
-
-* Risk score (0–1)
-* Confidence score
-* Explanation
-
----
-
-### SOP-FIN-003: Human-in-the-Loop
-
-Trigger Conditions:
-
-* Risk score > threshold
-* New vendor
-* Amount spike
-* Low runway
-
-Actions:
-
-* Pause workflow
-* Notify approver
-* Capture decision
-* Feed back to learning loop
-
----
-
-### SOP-FIN-004: Cash Reconciliation (Mandatory)
-
-**Trigger:** Bank Feed update (Mercury API / Plaid / Teller)
-
-**Steps:**
-
-1. **Search** - Identify all "Cleared" transactions in the last 24 hours
-2. **Match** - Fuzzy matching on `Amount`, `Vendor Name`, and `Date` against `payments` table
-   ```typescript
-   function matchTransaction(bankTx, scheduledPayments) {
-     return scheduledPayments.find(p =>
-       Math.abs(p.amount - bankTx.amount) < 0.01 &&
-       similarStrings(p.vendorName, bankTx.description) > 0.8 &&
-       Math.abs(dateDiff(p.scheduledDate, bankTx.date)) < 3
-     );
-   }
-   ```
-3. **Validate** - Confirm transaction ID matches bank's record
-4. **Action** - API call to ERP (Xero/QBO) to mark bill as "Reconciled"
-5. **Alert** - If no match found for significant outflow → **Alert Founder Immediately**
-
-**Reconciliation States:**
-| State | Meaning |
-|-------|---------|
-| `SCHEDULED` | Payment created, waiting for bank clear |
-| `CLEARED` | Transaction matched in bank feed |
-| `RECONCILED` | Marked complete in ERP |
-| `ORPHANED` | Bank transaction with no matching invoice |
-
----
-
-## 10. The "Context-Switching" Workflow (Process Map)
-
-When an invoice arrives, the agent builds a "Context Frame" before deciding.
+**I - Interface Segregation:**
 
 ```
-[INVOICE ARRIVAL]
-        ↓
-[INGEST → EXTRACT → DEDUPE]
-        ↓
-[TIME TRAVEL STEP - Graphiti Recall]
-   Query: "What happened with this vendor last month?"
-   Returns: Recent episodes, past disputes, approval patterns
-        ↓
-[CONTEXT LOAD]
-   ├── pgvector: Similar invoices + contract terms
-   └── Neo4j: Vendor relationship over time
-        ↓
-[THE AUTONOMOUS BRAIN]
-   [ANALYST] → Propose action (pattern detection)
-        ↓
-   [CRITIC] → Safety checks (Priority Matrix)
-        ↓
-[GATE]
-   ├── Risk ≤ Threshold → Auto-Execute
-   └── Risk > Threshold → HITL Review
-        ↓
-[EXECUTE]
-   ├── Stripe Test Mode: Create payout
-   └── QuickBooks: Post Bill + BillPayment
-        ↓
-[RECONCILE]
-   Webhook → Match payout to invoice → Update status
-        ↓
-[WRITE-BACK]
-   Graphiti: Add new episode ("Founder approved due to X reason")
-   Trust Battery: Update vendor trust
+python# ✅ Clients don't depend on methods they don't use
+class ReadableERP(Protocol):
+    def get_vendor(self, id: str) -> Vendor: ...
+
+class WritableERP(Protocol):
+    def create_bill(self, invoice: Invoice) -> str: ...
 ```
 
-### The "Money Shot" Demo Flow
-
-1. **Context Setup:** Manually add episode to Graphiti: "Jan 1st: Founder put vendor 'Acme' on probation due to bad service."
-
-2. **Trigger:** Send an invoice from 'Acme'.
-
-3. **Agent Action:** Agent pauses (HITL).
-
-4. **Reason:** "Vendor is on probation (Episode Jan 1st)."
-
-5. **Resolution:** Founder approves with override.
-
-6. **Execution:** System shows Stripe Payout succeeded & QBO Bill created.
-
-7. **Update:** Agent writes new episode: "Jan 12th: Founder overrode probation to pay Acme."
-
-### Process States
-
-| State | Description |
-|-------|-------------|
-| `NEW` | Invoice received, not yet processed |
-| `EXTRACTED` | Fields extracted with confidence score |
-| `CONTEXT_LOADED` | Graphiti/Neo4j context retrieved |
-| `VALIDATED` | Risk assessed, ready for decision |
-| `APPROVED` | Auto-approved or human-approved |
-| `PENDING` | Scheduled, waiting for payment execution |
-| `PAID` | Payment executed, awaiting reconciliation |
-| `RECONCILED` | Bank transaction matched, complete |
-| `REJECTED` | Rejected with reason |
-
----
-
-## 11. User Stories (Real Founder Language)
-
-> “I want invoices handled automatically so I only see problems, not paperwork.”
-
-> “I want to know if paying something now will hurt my runway.”
-
-> “I want confidence nothing slips through or gets paid twice.”
-
----
-
-## 12. KPIs (What Actually Matters)
-
-### Operational
-
-* % invoices auto-processed
-* HITL rate over time
-* Processing time per invoice
-
-### Business
-
-* Late fees avoided
-* Duplicate payments prevented
-* Runway risk alerts accuracy
-
-### Trust
-
-* False positive rate
-* False negative rate
-* Manual overrides
-
----
-
-## 13. Dev Plan (Step-by-Step)
-
-### Phase 1 – Foundation (2 weeks)
-
-* Postgres + pgvector
-* Redis
-* LangGraph skeleton
-* Email ingestion
-
-### Phase 2 – Core Agent (3 weeks)
-
-* Invoice extraction
-* Context fetch
-* Risk scoring
-* HITL flow
-
-### Phase 3 – Execution (2 weeks)
-
-* Payment scheduling
-* Ledger posting
-* Notifications
-
-### Phase 4 – Learning Loop (2 weeks)
-
-* Feedback ingestion
-* Threshold tuning
-* Vendor scoring
-
-### Phase 5 – UX & Polish (2 weeks)
-
-* Approval UI
-* Audit timeline
-* Confidence explanations
-
----
-
-## 14. Deliverables Checklist
-
-### Must-Have
-
-* [ ] Autonomous invoice handling
-* [ ] Context-aware decisions
-* [ ] HITL controls
-* [ ] Audit trail
-* [ ] Learning loop
-
-### Nice-to-Have
-
-* [ ] Vendor insights
-* [ ] Cash optimization suggestions
-* [ ] Payment timing intelligence
-
----
-
-## 15. What Makes Invoicify Defensible
-
-1. **Context graph** (hard to copy)
-2. **Decision history** (moat over time)
-3. **Trust calibration**
-4. **Founder-centric UX**
-5. **Role-based framing**
-
----
-
-### The "Trust Battery" (Calibration)
-
-**Shadow Mode Deployment (First 14 Days)**
-
-For the initial 14 days, Invoicify runs in **Shadow Mode**:
-- Agent makes decisions but **does not execute**
-- Records what it "would have done"
-- Tracks human decisions for comparison
-
-**Calibration Report Generation (Day 15)**
-
-```typescript
-interface CalibrationReport {
-  totalInvoices: number;
-  shadowDecisions: number;
-  truePositives: number;      // Caught duplicates/frauds
-  timeSaved: number;          // Hours of manual work avoided
-  accuracyRate: number;       // % matching human decisions
-  recommendations: string[];  // Threshold tuning suggestions
-}
-```
-
-**Example Report:**
-> *"I would have caught 3 duplicates and saved 4.2 hours. My accuracy was 99.4%. Recommend promoting 2 vendors to Core trust level."*
-
-**Why This Wins Trust:**
-1. **No risk** - Cannot make mistakes during learning period
-2. **Measurable** - Founder sees concrete value immediately
-3. **Transparent** - Full audit of agent reasoning available
-4. **Earned Autonomy** - Trust battery naturally increases with proven accuracy
-
----
-
-## 16. How This Fits the Bigger Vision
-
-* Invoicify → **Finance Intern**
-* Finance Intern → **Entry Point to Founder OS**
-* Founder OS → **Virtual Office**
-
-Nothing here is wasted.
-
----
-
-## 17. Final Reality Check
-
-If Invoicify does not:
-
-* Reduce founder anxiety
-* Reduce manual work
-* Surface problems early
-
-Then it has failed.
-
----
-Below is the **complete, execution-ready technical package for Invoicify**.
-This is not conceptual. This is **what you build**.
-
-I will give you, in order:
-
-1. **Exact DB schemas (Postgres + pgvector + Neo4j)**
-2. **LangGraph code skeleton (production-style)**
-3. **Risk scoring formula (deterministic + learnable)**
-4. **UI wireframe (textual + component spec, founder-grade)**
-
-No gaps. No hand-waving.
-
----
-
-# 1. EXACT DATABASE SCHEMAS
-
-## 1.1 Postgres (Source of Truth)
-
-### invoices
-
-```sql
-CREATE TABLE invoices (
-    id UUID PRIMARY KEY,
-    vendor_id UUID NOT NULL,
-    invoice_number TEXT NOT NULL,
-    invoice_date DATE,
-    due_date DATE,
-    currency TEXT DEFAULT 'USD',
-    amount NUMERIC(12,2) NOT NULL,
-    status TEXT CHECK (status IN (
-        'received','parsed','approved','scheduled','paid','rejected'
-    )),
-    risk_score NUMERIC(4,3),
-    confidence_score NUMERIC(4,3),
-    embedding VECTOR(1536),
-    raw_document_url TEXT,
-    created_at TIMESTAMP DEFAULT now()
-);
-```
-
----
-
-### vendors
-
-```sql
-CREATE TABLE vendors (
-    id UUID PRIMARY KEY,
-    name TEXT NOT NULL,
-    trust_score NUMERIC(4,3) DEFAULT 0.5,
-    avg_invoice_amount NUMERIC(12,2),
-    payment_terms_days INT,
-    anomaly_rate NUMERIC(4,3),
-    created_at TIMESTAMP DEFAULT now()
-);
-```
-
----
-
-### approvals
-
-```sql
-CREATE TABLE approvals (
-    id UUID PRIMARY KEY,
-    invoice_id UUID REFERENCES invoices(id),
-    approved_by TEXT,
-    decision TEXT CHECK (decision IN ('approved','rejected','delayed')),
-    reason TEXT,
-    confidence_override BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT now()
-);
-```
-
----
-
-### payments
-
-```sql
-CREATE TABLE payments (
-    id UUID PRIMARY KEY,
-    invoice_id UUID REFERENCES invoices(id),
-    scheduled_date DATE,
-    executed_date DATE,
-    status TEXT CHECK (status IN ('scheduled','executed','failed')),
-    payment_method TEXT,
-    created_at TIMESTAMP DEFAULT now()
-);
-```
-
----
-
-### agent_runs (critical for auditability)
-
-```sql
-CREATE TABLE agent_runs (
-    id UUID PRIMARY KEY,
-    invoice_id UUID,
-    node TEXT,
-    input JSONB,
-    output JSONB,
-    decision TEXT,
-    confidence NUMERIC(4,3),
-    created_at TIMESTAMP DEFAULT now()
-);
-```
-
----
-
-## 1.2 pgvector (Semantic Memory)
-
-Stored inline as `embedding VECTOR(1536)` in:
-
-* invoices
-* vendors
-* approvals.reason (optional)
-
-Use for:
-
-* similarity detection
-* anomaly detection
-* historical reasoning
-
----
-
-## 1.3 Neo4j (Context Graph)
-
-### Nodes
+**D - Dependency Inversion:**
 
 ```
-(:Vendor {id, name, trust_score})
-(:Invoice {id, amount, risk_score})
-(:Approval {id, decision})
-(:Payment {id, status})
+python# ✅ High-level workflow depends on abstractions, not concrete classes
+@workflow.defn
+class InvoiceWorkflow:
+    def __init__(self, vision: VisionAdapter, erp: ERPAdapter):
+        self.vision = vision  # Injected, not instantiated
+        self.erp = erp
 ```
 
-### Relationships
+## 3.2 Data Models (Pydantic)
 
 ```
-(Vendor)-[:ISSUED]->(Invoice)
-(Invoice)-[:REQUIRES]->(Approval)
-(Invoice)-[:PAID_BY]->(Payment)
-```
+pythonfrom pydantic import BaseModel, Field
+from decimal import Decimal
+from datetime import datetime
+from typing import Literal
 
-This is **not optional**.
-Graphs are how you reason over financial behavior over time.
+class LineItem(BaseModel):
+    description: str
+    quantity: int
+    unit_price: Decimal
+    total: Decimal
 
----
-
-# 2. LANGGRAPH CODE SKELETON (REALISTIC)
-
-Python, production-style.
-
-### 2.1 Agent State (LangGraph SQL State)
-
-```python
-from pydantic import BaseModel
-from typing import Optional
-
-class InvoiceState(BaseModel):
-    invoice_id: str
+class Invoice(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     vendor_id: str
-    amount: float
-    risk_score: Optional[float]
-    confidence: Optional[float]
-    action: Optional[str]
+    vendor_name: str
+    invoice_number: str
+    amount: Decimal
+    currency: Literal["USD", "EUR", "INR"] = "USD"
+    invoice_date: datetime
+    due_date: datetime | None = None
+    line_items: list[LineItem]
+    
+    # Metadata
+    trace_id: str
+    source: Literal["gmail", "api", "upload"]
+    raw_file_url: str  # S3 path
+    
+    # Processing State
+    status: Literal["INGESTED", "EXTRACTED", "APPROVED", "PAID", "RECONCILED"]
+    risk_score: float | None = None
+    confidence: float | None = None
+    
+    # Timestamps
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class DecisionSignal(BaseModel):
+    category: Literal["RUNWAY", "TRUST", "DUPLICATE", "CONTRACT", "BUDGET"]
+    severity: Literal["INFO", "WARNING", "CRITICAL"]
+    message: str
+    recommendation: Literal["APPROVE", "REVIEW", "REJECT"]
+    score_contribution: float = 0.0
+
+class VendorTrustBattery(BaseModel):
+    vendor_id: str
+    trust_level: int = Field(ge=1, le=5, default=1)  # 1=New, 5=Trusted
+    consecutive_accurate: int = 0
+    consecutive_errors: int = 0
+    total_invoices: int = 0
+    auto_approve_threshold: Decimal = Decimal("500.00")
+    last_updated: datetime
 ```
 
----
-
-### 2.2 Core Graph
-
-```python
-from langgraph.graph import StateGraph, END
-
-graph = StateGraph(InvoiceState)
-```
-
----
-
-### 2.3 Nodes
-
-#### Extract
-
-```python
-def extract_invoice(state: InvoiceState):
-    # OCR + parser already done upstream
-    return state
-```
-
----
-
-#### Context Fetch
-
-```python
-def fetch_context(state: InvoiceState):
-    vendor = get_vendor(state.vendor_id)
-    runway = get_company_runway()
-    history = fetch_similar_invoices(state.amount)
-    return {
-        **state.dict(),
-        "vendor_trust": vendor.trust_score,
-        "runway_days": runway,
-        "history_similarity": history.similarity
-    }
-```
-
----
-
-#### Risk Assessment (Core Brain)
-
-```python
-def assess_risk(state):
-    risk, confidence = calculate_risk(state)
-    return {
-        **state,
-        "risk_score": risk,
-        "confidence": confidence
-    }
-```
-
----
-
-#### Decision Router
-
-```python
-def route_action(state):
-    if state["risk_score"] < 0.3 and state["confidence"] > 0.8:
-        return "auto_approve"
-    elif state["risk_score"] < 0.6:
-        return "hitl"
-    else:
-        return "escalate"
-```
-
----
-
-#### HITL Node
-
-```python
-def human_review(state):
-    pause_for_approval(state.invoice_id)
-    return state
-```
-
----
-
-### 2.4 Graph Assembly
-
-```python
-graph.add_node("extract", extract_invoice)
-graph.add_node("context", fetch_context)
-graph.add_node("risk", assess_risk)
-graph.add_node("hitl", human_review)
-
-graph.add_edge("extract", "context")
-graph.add_edge("context", "risk")
-graph.add_conditional_edges(
-    "risk",
-    route_action,
-    {
-        "auto_approve": END,
-        "hitl": "hitl",
-        "escalate": "hitl"
-    }
-)
-
-app = graph.compile()
-```
-
----
-
-# 3. RISK SCORING FORMULA (REAL, NOT ML-BS)
-
-This is **hybrid deterministic + learnable**.
-
-### 3.1 Inputs
-
-| Signal               | Range |
-| -------------------- | ----- |
-| Vendor trust         | 0–1   |
-| Amount deviation     | 0–1   |
-| Duplicate similarity | 0–1   |
-| Runway pressure      | 0–1   |
-| New vendor           | 0/1   |
-
----
-
-### 3.2 Formula
-
-```text
-risk_score =
-  (0.30 * amount_deviation)
-+ (0.25 * duplicate_similarity)
-+ (0.20 * (1 - vendor_trust))
-+ (0.15 * runway_pressure)
-+ (0.10 * is_new_vendor)
-```
-
-### Confidence
-
-```text
-confidence = 1 - variance(history_similarity)
-```
-
-### Why this matters:
-
-* Deterministic
-* Auditable
-* ML can tune weights later
-* Founders can trust it
-
----
-
-# 4. UI WIREFRAME (FOUNDER-GRADE)
-
-No fluff. One screen philosophy.
-
----
-
-## 4.1 Main Dashboard
+## 3.3 Database Schema (Postgres)
 
 ```
-┌─────────────────────────────────────────────┐
-│ Invoicify – Finance Intern                  │
-│ Runway: 7.3 months 🟢                       │
-├─────────────────────────────────────────────┤
-│ Incoming Invoices                           │
-│ ┌────────────┬─────────┬──────┬─────────┐ │
-│ │ Vendor     │ Amount  │ Risk │ Action  │ │
-│ ├────────────┼─────────┼──────┼─────────┤ │
-│ │ AWS        │ $3,200  │ LOW  │ Auto ✓  │ │
-│ │ NewVendorX │ $12,500 │ HIGH │ Review  │ │
-│ └────────────┴─────────┴──────┴─────────┘ │
-└─────────────────────────────────────────────┘
+sql-- Core Entities
+CREATE TABLE vendors (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL,
+    salesforce_account_id VARCHAR(50),
+    trust_level INT DEFAULT 1 CHECK (trust_level BETWEEN 1 AND 5),
+    auto_approve_threshold DECIMAL(10,2) DEFAULT 500.00,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE invoices (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    vendor_id UUID REFERENCES vendors(id),
+    invoice_number VARCHAR(100) NOT NULL,
+    amount DECIMAL(10,2) NOT NULL,
+    currency CHAR(3) DEFAULT 'USD',
+    invoice_date DATE NOT NULL,
+    due_date DATE,
+    
+    -- Processing
+    status VARCHAR(20) NOT NULL,
+    risk_score FLOAT,
+    confidence FLOAT,
+    
+    -- Source
+    trace_id VARCHAR(100) NOT NULL,
+    source VARCHAR(20),
+    raw_file_url TEXT,
+    docling_markdown TEXT,
+    
+    -- Ledger References
+    qbo_bill_id VARCHAR(50),
+    stripe_payout_id VARCHAR(50),
+    
+    -- Audit
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    
+    UNIQUE(vendor_id, invoice_number)
+);
+
+CREATE INDEX idx_invoices_trace ON invoices(trace_id);
+CREATE INDEX idx_invoices_status ON invoices(status);
+CREATE INDEX idx_invoices_vendor ON invoices(vendor_id);
+
+-- Trust Battery
+CREATE TABLE trust_battery (
+    vendor_id UUID PRIMARY KEY REFERENCES vendors(id),
+    consecutive_accurate INT DEFAULT 0,
+    consecutive_errors INT DEFAULT 0,
+    total_decisions INT DEFAULT 0,
+    accurate_decisions INT DEFAULT 0,
+    last_decision_at TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Audit Trail
+CREATE TABLE decision_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    invoice_id UUID REFERENCES invoices(id),
+    trace_id VARCHAR(100),
+    actor VARCHAR(20), -- 'AGENT' or 'HUMAN'
+    action VARCHAR(50),
+    reasoning JSONB, -- Array of DecisionSignals
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Line Items (Normalized)
+CREATE TABLE line_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    invoice_id UUID REFERENCES invoices(id) ON DELETE CASCADE,
+    description TEXT,
+    quantity INT,
+    unit_price DECIMAL(10,2),
+    total DECIMAL(10,2)
+);
 ```
 
----
+## 3.4 API Design (Types & Endpoints)
 
-## 4.2 Invoice Detail (HITL Screen)
-
-```
-Invoice: #INV-23901
-Vendor: NewVendorX
-Amount: $12,500
-Due: 14 days
-
-Why flagged:
-• Amount 3× higher than normal
-• Vendor has no payment history
-• Runway impact: -0.8 months
-
-[ Approve ]  [ Delay ]  [ Reject ]
-```
-
----
-
-## 4.3 Audit Timeline
+**Ingestion API (Cloudflare Worker):**
 
 ```
-• Invoice received (09:41)
-• Parsed successfully
-• Risk score: 0.71 (High)
-• Escalated to human
-• Approved by Founder (09:55)
-• Payment scheduled
-```
-
-This **builds trust**.
-
----
-
-# 5. FINAL DEV CHECKLIST (PIN THIS)
-
-### Must Ship
-
-* [ ] Autonomous processing
-* [ ] Risk-based routing
-* [ ] HITL UI
-* [ ] Audit trail
-* [ ] Learning loop
-
-### Must NOT Ship
-
-* ❌ Manual-first workflows
-* ❌ Feature bloat
-* ❌ Generic dashboards
-* ❌ Black-box decisions
-
----
-
-# 6. REALITY STATEMENT (Important)
-
-If Invoicify cannot:
-
-* Act without prompts
-* Explain its decisions
-* Reduce founder attention
-
-Then it is **not an agent**.
-It is just software.
-
----
-
-### The Final Reality Check
-
-If Invoicify does not **automatically reconcile the bank account** and **strategically delay payments during a cash crunch**, it is just an expensive OCR tool.
-
-With these consolidated upgrades, it is a **Finance Ops Intern**.
-
----
-
-## Revised Technical Implementation Guide
-
-| Module | Technical Choice | Reason |
-| :--- | :--- | :--- |
-| **Orchestration** | **LangGraph** | Required for the Analyst-Critic loop and state persistence |
-| **Memory** | **pgvector (Postgres)** | Stores historical invoice "fingerprints" and contract clauses for semantic matching |
-| **Banking** | **Mercury API / Plaid** | Native Mercury integration is the "gold standard" for this ICP |
-| **Safety** | **Idempotency Keys** | Every payment request must have a hash-based key to prevent double-payments |
-| **Agent Runtime** | **Cloudflare Workers** | Serverless edge deployment for low latency, high availability |
-| **Database** | **D1 (SQLite)** | Lightweight, production-ready for edge functions |
-| **OCR** | **Vision API / Tesseract** | Document extraction with confidence scoring |
-| **Learning** | **Trust Battery** | Gradual autonomy based on demonstrated accuracy |
-
----
-
-## What I recommend next (order matters):
-
-1. **Implement DB schemas**
-2. **Wire LangGraph skeleton**
-3. **Hardcode risk formula**
-4. **Build HITL UI**
-5. **Only then optimize**
-
----
-
-# APPENDIX A: IMPLEMENTATION-SPECIFIC ADDENDUM
-
-> This section addresses gaps identified during live build for production deployment.
-
----
-
-## 1. Day 0 Bootstrap Module
-
-The PRD assumes the agent "learns over time" via Trust Battery and Calibration Reports, but does not specify **how to seed initial intelligence** so the agent isn't "dumb" on Day 1.
-
-### Bootstrap Requirements
-
-On first install, the system **MUST** ingest historical data to achieve functional baseline:
-
-| Data Source | Target Table | Minimum Seeding |
-|-------------|--------------|-----------------|
-| **Last 6 months bills/payments** | `vendors` | 50+ vendor records |
-| **Historical payment patterns** | `episodes` (Graphiti) | 100+ decision records |
-| **Past invoice embeddings** | `pgvector` | 200+ invoice vectors |
-
-### Bootstrap Methods (Priority Order)
-
-1. **QuickBooks Online API Import**
-   ```typescript
-   // Fetch last 6 months of bills
-   await qbClient.queryBills({
-     txnDate: { $gte: "2024-07-01" },
-     MAXRESULTS: 500
-   });
-   ```
-
-2. **CSV Upload Fallback**
-   ```typescript
-   interface BootstrapCSV {
-     vendorName: string;
-     invoiceNumber: string;
-     amount: number;
-     dueDate: string;
-     paidDate?: string;
-     status: "paid" | "pending" | "rejected";
-   }
-   ```
-
-3. **Manual Entry** (for Phase 1 MVP)
-   - Allow founders to manually add top 5 vendors
-   - Trust Battery starts at Level 2 (Standard) for manually-verified vendors
-
-### Bootstrap Validation
-
-After seeding, run `POST /api/v1/bootstrap/verify`:
-- Returns: `{ vendorsSeeded: number, episodesSeeded: number, embeddingsSeeded: number }`
-- Fails deployment if thresholds not met
-
----
-
-## 2. Execution Layer Specification
-
-**Current PRD Ambiguity:** The "Banking" row lists "Mercury API / Plaid" but this portfolio build uses **Stripe + QuickBooks Online**.
-
-### Corrected Tech Stack Table
-
-| Module | Technical Choice | Reason |
-| :--- | :--- | :--- |
-| **Orchestration** | **LangGraph** | Required for Analyst-Critic loop and state persistence |
-| **Memory** | **pgvector** (via Neon/Supabase) | Stores invoice "fingerprints" for semantic matching |
-| **Banking / Payments** | **Stripe Connect (Test Mode)** | Simulates payment processing for portfolio build |
-| **Ledger / Accounting** | **QuickBooks Online API** | Authoritative source for vendor data, bills, payments |
-| **Safety** | **Idempotency Keys** | Every payment request uses hash-based keys |
-| **Agent Runtime** | **Cloudflare Workers** | Serverless edge for low latency |
-| **Database** | **D1 (SQLite)** + **Neon (Postgres/pgvector)** | Hybrid: transactional + vector search |
-| **OCR** | **Cloudflare Workers AI (Llama 3.2 Vision)** | On-device document extraction |
-| **Learning** | **Trust Battery** | Gradual autonomy based on accuracy |
-| **Knowledge Graph** | **Graphiti** (self-hosted or cloud) | Episodic memory for vendor relationships |
-
-### Stripe Configuration
-
-```typescript
-// worker/wrangler.toml
-[vars.STRIPE_TEST_KEY]
-source = "env"
-
-[vars.STRIPE_WEBHOOK_SECRET]
-source = "secret"  # wrangler secret put STRIPE_WEBHOOK_SECRET
-```
-
-### QuickBooks Configuration
-
-```typescript
-// worker/wrangler.toml
-[vars.QUICKBOOKS_CLIENT_ID]
-source = "env"
-
-[vars.QUICKBOOKS_CLIENT_SECRET]
-source = "secret"  # wrangler secret put QUICKBOOKS_CLIENT_SECRET
-
-[vars.QUICKBOOKS_REFRESH_TOKEN]
-source = "secret"
-
-[vars.QUICKBOOKS_REALM_ID]
-source = "env"
-```
-
----
-
-## 3. Continuous Ingestion Pipeline
-
-The PRD mentions "Email Ingestion" and "Bank Feed" as separate triggers, but requires a **unified write-back loop** to keep the Knowledge Graph synchronized.
-
-### Pipeline Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    CONTINUOUS INGESTION PIPELINE                     │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────┐     │
-│  │   INVOICE   │───▶│   EXTRACT   │───▶│   RISK ASSESSMENT   │     │
-│  │   ARRIVES   │    │   (Vision)  │    │                     │     │
-│  └─────────────┘    └─────────────┘    └──────────┬──────────┘     │
-│                                                    │                 │
-│                         ┌──────────────────────────┘                 │
-│                         │                                           │
-│                         ▼                                           │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                    WRITE-BACK LOOP                          │   │
-│  ├─────────────────────────────────────────────────────────────┤   │
-│  │                                                             │   │
-│  │  ┌─────────────────────────────────────────────────────┐   │   │
-│  │  │ WRITE 1: pgvector Embeddings                        │   │   │
-│  │  │ Every invoice → extracted_text embedding            │   │   │
-│  │  │ Purpose: Semantic search, duplicate detection       │   │   │
-│  │  └─────────────────────────────────────────────────────┘   │   │
-│  │                                                             │   │
-│  │  ┌─────────────────────────────────────────────────────┐   │   │
-│  │  │ WRITE 2: Graphiti Episodes                          │   │   │
-│  │  │ Every human decision → new episode record           │   │   │
-│  │  │ Purpose: Learn from approvals/rejections            │   │   │
-│  │  └─────────────────────────────────────────────────────┘   │   │
-│  │                                                             │   │
-│  │  ┌─────────────────────────────────────────────────────┐   │   │
-│  │  │ WRITE 3: Vendor Trust Stats                         │   │   │
-│  │  │ Every reconciled payment → update trust battery     │   │   │
-│  │  │ Purpose: Auto-approve thresholds update             │   │   │
-│  │  └─────────────────────────────────────────────────────┘   │   │
-│  │                                                             │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### Implementation Details
-
-#### Write 1: pgvector Embeddings
-
-```typescript
-// worker/src/routes/extract.ts
-await extractRoutes.post("/complete", async (c) => {
-  const { invoiceId, extractedText } = await c.req.json();
-
-  // Generate embedding
-  const embedding = await env.AI.run("@cf/baai/bge-en-15", {
-    text: extractedText,
-  });
-
-  // Store in pgvector (via Neon/Supabase)
-  await db.insert(schema.invoiceEmbeddings).values({
-    invoiceId,
-    embedding,
-    createdAt: new Date().toISOString(),
-  });
-});
-```
-
-#### Write 2: Graphiti Episodes
-
-```typescript
-// worker/src/lib/audit-tracer.ts
-export async function logDecision(
-  env: Env,
-  invoiceId: string,
-  decision: "approved" | "rejected" | "delayed",
-  reasoning: string
-) {
-  // Write episode to Graphiti
-  await graphitiClient.createEpisode({
-    type: "HUMAN_DECISION",
-    entities: [invoiceId],
-    observations: [
-      {
-        type: "decision",
-        value: decision,
-        source: "human_reviewer",
-        reasoning,
-      },
-    ],
-  });
-}
-```
-
-#### Write 3: Trust Battery Update
-
-```typescript
-// worker/src/lib/trust-battery.ts
-export async function recordDecision(
-  env: Env,
-  vendorId: string,
-  outcome: "accurate" | "inaccurate"
-) {
-  const db = getDb(env);
-
-  // Update trust battery
-  await db.insert(schema.trustHistory).values({
-    vendorId,
-    decision: outcome,
-    timestamp: new Date().toISOString(),
-  });
-
-  // Recalculate level
-  await recalculateVendorTrust(db, vendorId);
-}
-```
-
-### Pipeline Performance Requirements
-
-| Metric | Target | How Achieved |
-|--------|--------|--------------|
-| **Embedding Latency** | < 500ms | Cloudflare Workers AI |
-| **Episode Write Latency** | < 200ms | Graphiti async write |
-| **Trust Update Latency** | < 100ms | D1 transaction |
-| **End-to-End Pipeline** | < 2s | Parallel writes |
-
----
-
-## 4. API Contract Summary
-
-### Core Endpoints (v1)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/health` | Health check |
-| `POST` | `/api/v1/invoices` | Create invoice |
-| `GET` | `/api/v1/invoices` | List with pagination |
-| `GET` | `/api/v1/invoices/:id` | Get details |
-| `GET` | `/api/v1/invoices/search?q=` | Search |
-| `POST` | `/api/v1/invoices/:id/approve` | HITL approve |
-| `POST` | `/api/v1/workflow/start` | Start processing |
-| `GET` | `/api/v1/risk/:invoiceId` | Get risk score |
-| `POST` | `/api/v1/quickbooks/auth` | OAuth URL |
-
-### Response Standards
-
-```typescript
-interface ApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: {
-    code: string;
-    message: string;
+typescript// POST /upload
+interface UploadRequest {
+  file: File;  // Multipart form data
+  metadata?: {
+    source: "email" | "api" | "manual";
+    user_id: string;
   };
-  pagination?: {
-    page: number;
-    limit: number;
-    total: number;
+}
+
+interface UploadResponse {
+  trace_id: string;
+  status: "queued" | "processing";
+  estimated_completion_seconds: number;
+}
+```
+
+**Status API (Query Layer):**
+
+```
+typescript// GET /invoices/:trace_id
+interface InvoiceStatus {
+  trace_id: string;
+  status: "INGESTED" | "EXTRACTED" | "APPROVED" | "PAID";
+  invoice_data?: Invoice;
+  decision_signals?: DecisionSignal[];
+  timeline: {
+    ingested_at: string;
+    extracted_at?: string;
+    approved_at?: string;
   };
 }
 ```
 
----
+------
 
-## 5. Security Boundaries
+## 4. WORKFLOW & SOPs
 
-| Boundary | Implementation |
-|----------|----------------|
-| **Auth** | API key validation (Phase 2) |
-| **Rate Limiting** | Cloudflare WAF rules |
-| **Input Validation** | Zod schemas on all POST/PUT |
-| **SQL Injection** | Drizzle ORM parameterization |
-| **XSS** | secureHeaders() middleware |
-| **CORS** | Explicit origin allowlist |
+## 4.1 End-to-End Process Flow
 
----
+```
+text┌─────────────────────────────────────────────────────────────┐
+│ PHASE 1: INGESTION                                          │
+│ Trigger: Gmail Email / API Upload / COS Bucket Event       │
+│ Action: Validate → Upload to COS → Push to WarpStream      │
+│ Output: Event {trace_id, file_url, source}                 │
+│ SLA: <200ms                                                 │
+└────────────────┬────────────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 2: EXTRACTION (Vision Pipeline)                      │
+│ Step 1: Temporal Workflow Triggered                        │
+│ Step 2: Download PDF from COS                              │
+│ Step 3: IBM Docling → Extract Layout (Markdown)            │
+│ Step 4: IBM Granite 13B → Parse Entities (JSON)            │
+│ Output: Structured Invoice Object + Confidence Score       │
+│ SLA: <10s                                                   │
+└────────────────┬────────────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 3: CONTEXT LOADING (Parallel)                        │
+│ Thread A: Salesforce → Check Contract Status               │
+│ Thread B: QuickBooks → Search Duplicate Invoice Numbers    │
+│ Thread C: Qdrant → Find Similar Past Invoices (Vector)     │
+│ Output: Context{contract_valid, is_duplicate, similar[]}   │
+│ SLA: <3s (parallel execution)                               │
+└────────────────┬────────────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 4: RISK ASSESSMENT                                   │
+│ ML Model: River (Online Anomaly Detection)                 │
+│ Features: [amount, days_since_last, vendor_trust]          │
+│ Output: risk_score (0.0 - 1.0)                             │
+│ Decision: score + signals → APPROVE | REVIEW | REJECT      │
+│ SLA: <2s                                                    │
+└────────────────┬────────────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 5: AGENT DECISION (Analyst-Critic)                   │
+│ Analyst: Proposes action based on context + risk           │
+│ Critic: Audits against Priority Matrix:                    │
+│   1. RUNWAY (Do we have cash?)                              │
+│   2. STRATEGY (Aligns with mode?)                           │
+│   3. CONTRACT (Is vendor authorized?)                       │
+│   4. TRUST (Within auto-approve threshold?)                 │
+│   5. BUDGET (Within category limits?)                       │
+│ Output: AUTOAPPROVE | HITL_REQUIRED | REJECT               │
+│ SLA: <5s                                                    │
+└────────────────┬────────────────────────────────────────────┘
+                 │
+        ┌────────┴────────┐
+        │                 │
+        ▼                 ▼
+   [AUTOAPPROVE]     [HITL_REQUIRED]
+        │                 │
+        │                 └──▶ Wait for Human Approval
+        │                      (Webhook/Dashboard)
+        │                            │
+        └────────┬───────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 6: EXECUTION                                          │
+│ Step 1: QuickBooks → Create Bill (POST /v3/bill)           │
+│ Step 2: Stripe → Schedule Payout (if payment needed)       │
+│ Step 3: Slack → Send Notification                          │
+│ Output: External IDs (qbo_bill_id, stripe_payout_id)       │
+│ SLA: <10s                                                   │
+└────────────────┬────────────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────────────────────────┐
+│ PHASE 7: LEARNING (Trust Battery Update)                   │
+│ Action: Update vendor trust based on outcome               │
+│ Persist: River model state to COS                          │
+│ Audit: Write decision_log entry                            │
+│ SLA: <1s                                                    │
+└─────────────────────────────────────────────────────────────┘
+```
 
-## 6. Deployment Checklist
+## 4.2 SOPs
 
-- [ ] D1 database created and migrated
-- [ ] R2 bucket provisioned
-- [ ] Environment secrets set via `wrangler secret put`
-- [ ] Frontend built (`pnpm build`)
-- [ ] Assets served from Worker (`ASSETS` binding)
-- [ ] Rate limiting rules configured in Cloudflare WAF
-- [ ] QuickBooks OAuth flow tested
-- [ ] Bootstrap data seeded (50+ vendors, 100+ episodes)
+**SOP-001: Invoice Ingestion**
 
----
+1. Authenticate request (JWT or OAuth token)
+2. Validate file format (PDF, PNG, JPEG only)
+3. Generate unique trace_id (UUID v4)
+4. Upload to COS bucket: `invoicify-raw/{year}/{month}/{trace_id}.pdf`
+5. Publish event to WarpStream topic `invoices`
+6. Return 202 Accepted with trace_id
 
-*End of Addendum*
+**SOP-002: Human-in-the-Loop (HITL)**
 
+1. When risk_score > 0.6 OR contract_status != 'Active', pause workflow
+2. Send notification to approver (Email + Slack)
+3. Store pending decision in `hitl_queue` table
+4. Wait for signal (timeout: 24 hours)
+5. On approval: Resume workflow
+6. On rejection: Mark invoice as REJECTED, notify stakeholders
+7. On timeout: Escalate to senior approver
 
+**SOP-003: Duplicate Detection**
+
+1. Extract invoice_number from parsed data
+2. Query Postgres: `SELECT id FROM invoices WHERE vendor_id = ? AND invoice_number = ?`
+3. If match found: Set severity=CRITICAL, recommendation=REJECT
+4. Add DecisionSignal with message: "Duplicate invoice detected"
+
+**SOP-004: Anomaly Detection (River ML)**
+
+1. Load vendor-specific model from COS (key: `models/{vendor_id}.pkl`)
+2. If model doesn't exist, initialize fresh `HalfSpaceTrees`
+3. Calculate features: `{amount: float, days_since_last: int}`
+4. Score: `anomaly_score = model.score_one(features)`
+5. Learn: `model.learn_one(features)`
+6. Save updated model to COS
+7. Return anomaly_score
+
+------
+
+## 5. TESTING STRATEGY
+
+## 5.1 Unit Tests (Pytest)
+
+```
+python# test_vision_adapter.py
+def test_docling_extracts_tables():
+    adapter = GraniteDoclingAdapter()
+    result = adapter.extract_invoice("fixtures/invoice_with_table.pdf")
+    assert len(result.line_items) == 5
+    assert result.amount == Decimal("1250.00")
+
+# test_risk_calculator.py
+def test_anomaly_score_high_for_outlier():
+    detector = RiverAnomalyDetector("vendor_123")
+    # Train on normal amounts
+    for amt in [50, 55, 48, 52]:
+        detector.score_and_learn(amt)
+    
+    # Test outlier
+    score = detector.score_and_learn(500)
+    assert score > 0.8
+
+# test_decision_logic.py
+def test_critic_blocks_uncontracted_vendor():
+    signals = [
+        DecisionSignal(category="CONTRACT", severity="CRITICAL", 
+                      message="No contract", recommendation="REJECT")
+    ]
+    decision = critic_node(signals)
+    assert decision.action == "REJECT"
+```
+
+## 5.2 Integration Tests (E2E)
+
+```
+python# test_e2e_workflow.py
+@pytest.mark.asyncio
+async def test_happy_path_autoapproval():
+    # Arrange
+    trace_id = "test-" + str(uuid.uuid4())
+    mock_pdf = create_mock_invoice_pdf(vendor="Acme", amount=100)
+    
+    # Act
+    response = await client.post("/upload", files={"file": mock_pdf})
+    assert response.status_code == 202
+    
+    # Wait for workflow completion (poll status endpoint)
+    status = await poll_until_complete(trace_id, timeout=30)
+    
+    # Assert
+    assert status["status"] == "APPROVED"
+    assert status["qbo_bill_id"] is not None
+    
+    # Verify side effects
+    mock_qbo.assert_bill_created(vendor="Acme", amount=100)
+```
+
+## 5.3 LLM Evaluation (DeepEval)
+
+```
+pythonfrom deepeval import evaluate
+from deepeval.metrics import AnswerRelevancyMetric, FaithfulnessMetric
+from deepeval.test_case import LLMTestCase
+
+# Test extraction faithfulness
+def test_granite_extraction_accuracy():
+    dataset = load_test_invoices()  # 50 labeled invoices
+    
+    for invoice in dataset:
+        # Get model prediction
+        extracted = granite_adapter.extract_invoice(invoice.pdf)
+        
+        # Create test case
+        test_case = LLMTestCase(
+            input=invoice.pdf_text,
+            actual_output=extracted.model_dump_json(),
+            expected_output=invoice.ground_truth_json,
+            context=[invoice.docling_markdown]
+        )
+        
+        # Evaluate
+        metric = FaithfulnessMetric(threshold=0.9)
+        assert evaluate([test_case], [metric])
+
+# Test decision reasoning
+def test_analyst_critic_reasoning():
+    test_case = LLMTestCase(
+        input="Invoice from new vendor, amount $10,000, no contract",
+        actual_output=agent.decide(...),
+        expected_output={"action": "HITL", "reason": "High risk: new vendor + large amount"}
+    )
+    
+    metric = AnswerRelevancyMetric(threshold=0.8)
+    assert evaluate([test_case], [metric])
+```
+
+------
+
+## 6. DEPLOYMENT CHECKLIST
+
+**Pre-Deployment:**
+
+-  Secrets stored in environment variables (.env on Droplet)
+-  Dockerfile builds successfully (<500MB image size)
+-  All tests passing (unit, integration, LLM eval)
+-  Temporal Cloud connection verified
+-  WarpStream topic created (`invoices`)
+-  DigitalOcean Spaces bucket created (`invoicify-storage`)
+-  QuickBooks OAuth credentials obtained (sandbox)
+-  Salesforce Developer Edition account set up
+-  Gmail OAuth consent screen configured
+
+**Deployment Steps:**
+
+```
+bash# 1. Build and push container
+docker build -t invoicify-worker:v1 .
+docker tag invoicify-worker:v1 us.icr.io/invoicify/worker:v1
+ibmcloud cr login
+docker push us.icr.io/invoicify/worker:v1
+
+# 2. Deploy to IBM Code Engine
+ibmcloud ce application create \
+  --name invoicify-worker \
+  --image us.icr.io/invoicify/worker:v1 \
+  --cpu 1 --memory 2G \
+  --min-scale 0 --max-scale 10 \
+  --env-from-secret invoicify-secrets
+
+# 3. Deploy Cloudflare Worker
+cd edge/
+wrangler deploy
+
+# 4. Verify health
+curl https://invoicify-worker.us-south.codeengine.appdomain.cloud/health
+```
+
+**Post-Deployment:**
+
+-  Smoke test: Upload 1 invoice, verify it reaches APPROVED
+-  Check LangFuse dashboard for traces
+-  Monitor Droplet logs for errors
+-  Verify WarpStream lag is <1s
+-  Verify DO Spaces contains processed invoices
+
+------
+
+## 7. OBSERVABILITY & MONITORING
+
+**Traces (LangFuse):**
+
+```
+pythonfrom langfuse import Langfuse
+
+langfuse = Langfuse()
+
+@activity.defn
+async def extract_invoice_activity(file_url: str, trace_id: str):
+    trace = langfuse.trace(id=trace_id, name="invoice_extraction")
+    
+    with trace.span(name="docling_parse") as span:
+        markdown = docling.convert(file_url)
+        span.end(output=markdown[:100])
+    
+    with trace.span(name="granite_inference") as span:
+        invoice = granite.parse(markdown)
+        span.end(output=invoice.model_dump())
+```
+
+**Metrics (Prometheus):**
+
+```
+pythonfrom prometheus_client import Counter, Histogram
+
+invoice_processed = Counter('invoices_processed_total', 'Total invoices', ['status'])
+extraction_duration = Histogram('extraction_duration_seconds', 'Time to extract')
+
+# In code
+with extraction_duration.time():
+    result = extract_invoice(...)
+invoice_processed.labels(status=result.status).inc()
+```
+
+**Alerts (PagerDuty):**
+
+- `ErrorRate > 5%` over 5 minutes → Page on-call
+- `QueueLag > 100` messages → Slack alert
+- `ExtractionAccuracy < 90%` → Email to ML team
+
+------
+
+## 8. ARCHITECTURE TRADE-OFFS & DECISIONS
+
+| Decision                   | Alternative Considered   | Why Chosen                                          |
+| :------------------------- | :----------------------- | :-------------------------------------------------- |
+| **Event-Driven**           | Synchronous API          | Decouples ingestion from processing; handles spikes |
+| **Temporal**               | Celery + Redis           | Durable execution guarantees; built-in retries      |
+| **IBM Docling**            | Tesseract / AWS Textract | Preserves table structure; free; local execution    |
+| **WarpStream**             | Kafka / RabbitMQ         | Stateless (S3-backed); zero ops overhead            |
+| **Postgres**               | MongoDB                  | ACID transactions critical for financial data       |
+| **River ML**               | Scikit-Learn             | Online learning (no batch retraining)               |
+| **Hexagonal Architecture** | Monolithic               | Testability; infrastructure swappability            |
+
+------
+
+## 9. FINAL SYSTEM DIAGRAM (Complete)
+
+```
+text┌────────────────────────────────────────────────────────────────────┐
+│                         INVOICIFY PLATFORM                         │
+│                                                                    │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │ INGESTION LAYER                                             │  │
+│  │  • Gmail Poller (OAuth, scheduled every 5min)              │  │
+│  │  • Cloudflare Worker (HTTPS Upload API)                    │  │
+│  │  • IBM COS Event Trigger (Bucket watcher)                  │  │
+│  └─────────────────────────┬───────────────────────────────────┘  │
+│                            │ (Event: invoice.ingested)            │
+│                            ▼                                       │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │ EVENT BUS (WarpStream - Kafka Protocol)                    │  │
+│  │  • Topic: invoices                                          │  │
+│  │  • Retention: 7 days                                        │  │
+│  │  • Storage: IBM COS                                         │  │
+│  └─────────────────────────┬───────────────────────────────────┘  │
+│                            │ (Consume)                             │
+│                            ▼                                       │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │ COMPUTE LAYER (IBM Code Engine - Serverless Container)     │  │
+│  │                                                             │  │
+│  │  ┌──────────────────────────────────────────────────────┐  │  │
+│  │  │ TEMPORAL WORKER                                      │  │  │
+│  │  │  • Workflow: InvoiceProcessingWorkflow               │  │  │
+│  │  │  • Activities:                                       │  │  │
+│  │  │    - extract_invoice (Docling + Granite)             │  │  │
+│  │  │    - load_context (SF + QBO + Qdrant)                │  │  │
+│  │  │    - calculate_risk (River ML)                       │  │  │
+│  │  │    - agent_decision (Analyst-Critic)                 │  │  │
+│  │  │    - execute_payment (QBO + Stripe)                  │  │  │
+│  │  └──────────────────────────────────────────────────────┘  │  │
+│  │                                                             │  │
+│  │  ┌──────────────────────────────────────────────────────┐  │  │
+│  │  │ ADAPTERS (Dependency Injection)                      │  │  │
+│  │  │  • GraniteDoclingAdapter (Vision)                    │  │  │
+│  │  │  • SalesforceAdapter (CRM)                           │  │  │
+│  │  │  • QuickBooksAdapter (ERP)                           │  │  │
+│  │  │  • QdrantAdapter (Vector Search)                     │  │  │
+│  │  │  • RiverMLAdapter (Anomaly Detection)                │  │  │
+│  │  └──────────────────────────────────────────────────────┘  │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                                                                    │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  DATA & KNOWLEDGE LAYER                                      │  │
+│  │  • Postgres/Supabase (Source of Truth)                      │  │
+│  │  • Qdrant (Vector Embeddings)                               │  │
+│  │  • DigitalOcean Spaces (Raw Files + ML Models)              │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+│                                                                    │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │ EXTERNAL INTEGRATIONS                                       │  │
+│  │  • IBM Granite 13B (Watsonx.ai)                             │  │
+│  │  • Salesforce (Contract Verification)                       │  │
+│  │  • QuickBooks Online (Ledger)                               │  │
+│  │  • Stripe (Payments)                                        │  │
+│  │  • LangFuse (Observability)                                 │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+------
+
+## 10. SUCCESS METRICS
+
+**Technical KPIs:**
+
+- Processing latency P95: <30s
+- Extraction accuracy: >95%
+- System uptime: >99.5%
+- Cold start time: <60s
+- Queue lag: <5 messages
+
+**Business KPIs:**
+
+- Auto-approval rate: >60%
+- Late fee prevention: 100%
+- Duplicate payment prevention: 100%
+- Founder time saved: >80%
+- False positive rate: <10%
+
+------
+
+This specification is **production-ready**. Every component, interface, and decision is justified. You can hand this to a development team (or build it yourself) with confidence that it will scale, perform, and deliver business value.
