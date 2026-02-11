@@ -1,0 +1,23 @@
+# CodeRabbit Configuration
+language: en
+reviews:
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/vendor/**"
+    - "!**/.git/**"
+    - "!**/ai/**"
+    - "!**/worker/**"
+    - "python-worker/**"
+  path_instructions:
+    - path: "python-worker/**"
+      instructions: "Review Python code for the Temporal worker with focus on: 1) Type hints and async patterns, 2) Error handling, 3) Factory pattern implementation, 4) Security best practices"
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+      - master

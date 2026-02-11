@@ -1,0 +1,46 @@
+name = "invoicify-worker"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+node_compat = true
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "invoicify-db"
+database_id = "your-database-id-here"
+
+# R2 Storage
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "invoicify-storage"
+
+# Queue for async processing
+[[queues.producers]]
+binding = "INVOICE_QUEUE"
+queue = "invoicify-queue"
+
+[[queues.consumers]]
+queue = "invoicify-queue"
+max_batch_size = 10
+max_batch_timeout = 30
+
+# Durable Objects
+[[durable_objects.bindings]]
+name = "INVOICE_PROCESSOR"
+class_name = "InvoiceProcessor"
+
+# KV for session/cache
+[[kv_namespaces]]
+binding = "CACHE"
+id = "your-kv-id-here"
+
+[vars]
+ENVIRONMENT = "development"
+
+# Secrets (set via: wrangler secret put <NAME>)
+# GROQ_API_KEY
+# QUICKBOOKS_CLIENT_ID
+# QUICKBOOKS_CLIENT_SECRET
+# SALESFORCE_USERNAME
+# SALESFORCE_PASSWORD
+# SALESFORCE_SECURITY_TOKEN

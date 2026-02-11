@@ -1,0 +1,36 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    libpq-dev \
+    curl \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install UV for faster Python package management
+RUN pip install uv
+
+# Copy requirements
+COPY requirements-test.txt .
+
+# Install dependencies using UV
+RUN uv pip install --system -r requirements-test.txt
+
+# Copy source code
+COPY temporal/ ./temporal/
+COPY ai/ ./ai/
+COPY tests/ ./tests/
+COPY mocks/ ./mocks/
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Default command
+CMD ["pytest", "-v", "--color=yes"]
