@@ -1,0 +1,26 @@
+{
+  "name": "invoicify-worker",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "deploy": "wrangler deploy",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "db:migrate:create": "wrangler d1 migrations create invoicify-db",
+    "db:migrate:local": "wrangler d1 migrations apply invoicify-db --local",
+    "db:migrate:prod": "wrangler d1 migrations apply invoicify-db --remote",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4.6.0",
+    "drizzle-orm": "^0.38.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0",
+    "wrangler": "^3.103.0"
+  }
+}
