@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  neo4j:
+    image: neo4j:5.22.0
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/invoicify123
+    volumes:
+      - neo4j_data:/data
+    networks:
+      - invoicify
+
+  qdrant:
+    image: qdrant/qdrant:v1.10.1
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    networks:
+      - invoicify
+
+  agent:
+    build: 
+      context: ./apps/agent-core
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - QDRANT_URL=http://qdrant:6333
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - EDGE_API_BASE_URL=http://host.docker.internal:8787
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - neo4j
+      - qdrant
+    networks:
+      - invoicify
+
+networks:
+  invoicify:
+    driver: bridge
+
+volumes:
+  neo4j_data:
+  qdrant_storage:
