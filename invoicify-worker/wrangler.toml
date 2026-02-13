@@ -1,7 +1,7 @@
 name = "invoicify-worker"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
-node_compat = true
+compatibility_flags = ["nodejs_compat"]
 
 # D1 Database
 [[d1_databases]]
@@ -28,6 +28,11 @@ max_batch_timeout = 30
 [[durable_objects.bindings]]
 name = "INVOICE_PROCESSOR"
 class_name = "InvoiceProcessor"
+
+# Durable Objects Migrations
+[[migrations]]
+tag = "v1"
+new_classes = ["InvoiceProcessor"]
 
 # KV for session/cache
 [[kv_namespaces]]
