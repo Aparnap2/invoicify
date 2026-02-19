@@ -1,19 +1,19 @@
 """
-Service factory for Voice Agent — controlled entirely by environment variables.
+Service factory for Voice Agent — Sarvam-only for STT/TTS.
 
-Dev uses Docker local services (zero cost).
-Prod uses Sarvam API + Kokoro Modal.
+Dev uses Sarvam API (free credits).
+Prod uses Sarvam API (paid).
 ZERO code changes between environments.
 
 Usage:
-    # Local dev
-    STT_PROVIDER=local
-    TTS_PROVIDER=local
+    # Local dev (Sarvam free tier)
+    STT_PROVIDER=sarvam
+    TTS_PROVIDER=sarvam
     LLM_PROVIDER=ollama
     
-    # Production
+    # Production (Sarvam paid + Azure Foundry)
     STT_PROVIDER=sarvam
-    TTS_PROVIDER=modal
+    TTS_PROVIDER=sarvam
     LLM_PROVIDER=azure_foundry
 """
 
@@ -24,29 +24,21 @@ import structlog
 logger = structlog.get_logger()
 
 # Environment configuration
-STT_PROVIDER = os.getenv("STT_PROVIDER", "local")  # local | sarvam
-TTS_PROVIDER = os.getenv("TTS_PROVIDER", "local")  # local | modal | sarvam
+# NOTE: Sarvam-only for STT/TTS (no Kokoro, no local Docker)
+STT_PROVIDER = os.getenv("STT_PROVIDER", "sarvam")  # sarvam only
+TTS_PROVIDER = os.getenv("TTS_PROVIDER", "sarvam")  # sarvam only
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")  # ollama | azure_foundry | groq
 
 
 def get_stt_service_config() -> Dict[str, Any]:
     """
     Get STT service configuration.
-    
+    Uses Sarvam Saaras v3 for speech-to-text.
+
     Returns:
         Dict with service type and config
     """
-    if STT_PROVIDER == "local":
-        # open-sarika in Docker — OpenAI-compatible
-        return {
-            "type": "openai_compatible",
-            "base_url": os.getenv("STT_BASE_URL", "http://open-sarika-stt:8881"),
-            "api_key": "local",
-            "model": "open-sarika",
-            "language": os.getenv("VENDOR_LANGUAGE", "hi"),
-        }
-    
-    elif STT_PROVIDER == "sarvam":
+    if STT_PROVIDER == "sarvam":
         # Sarvam Saaras v3 API
         return {
             "type": "sarvam",
@@ -55,50 +47,19 @@ def get_stt_service_config() -> Dict[str, Any]:
             "language": os.getenv("VENDOR_LANGUAGE", "hi-IN"),
             "mode": os.getenv("SARVAM_STT_MODE", "transcribe"),  # transcribe | translate | codemix
         }
-    
-    elif STT_PROVIDER == "whisper":
-        # Fallback: faster-whisper
-        return {
-            "type": "openai_compatible",
-            "base_url": os.getenv("WHISPER_BASE_URL", "http://faster-whisper:8000"),
-            "api_key": "local",
-            "model": "large-v3",
-            "language": os.getenv("WHISPER_LANGUAGE", "hi"),
-        }
-    
-    raise ValueError(f"Unknown STT_PROVIDER: {STT_PROVIDER}")
+
+    raise ValueError(f"Unknown STT_PROVIDER: {STT_PROVIDER}. Only 'sarvam' is supported.")
 
 
 def get_tts_service_config() -> Dict[str, Any]:
     """
     Get TTS service configuration.
-    
+    Uses Sarvam Bulbul v3 for text-to-speech.
+
     Returns:
         Dict with service type and config
     """
-    if TTS_PROVIDER == "local":
-        # Kokoro FastAPI in Docker — OpenAI-compatible
-        return {
-            "type": "openai_compatible",
-            "base_url": os.getenv("TTS_BASE_URL", "http://kokoro-tts:8880"),
-            "api_key": "local",
-            "model": "kokoro",
-            "voice": os.getenv("TTS_VOICE", "af_heart"),
-            "speed": float(os.getenv("TTS_SPEED", "1.1")),
-        }
-    
-    elif TTS_PROVIDER == "modal":
-        # Kokoro on Modal — same OpenAI-compatible API, different URL
-        return {
-            "type": "openai_compatible",
-            "base_url": os.getenv("KOKORO_MODAL_URL"),
-            "api_key": "modal-no-key",
-            "model": "kokoro",
-            "voice": os.getenv("TTS_VOICE", "af_heart"),
-            "speed": float(os.getenv("TTS_SPEED", "1.1")),
-        }
-    
-    elif TTS_PROVIDER == "sarvam":
+    if TTS_PROVIDER == "sarvam":
         # Sarvam Bulbul v3 API — best Indian voice quality
         return {
             "type": "sarvam",
@@ -111,8 +72,8 @@ def get_tts_service_config() -> Dict[str, Any]:
             "loudness": float(os.getenv("SARVAM_TTS_LOUDNESS", "1.0")),
             "sample_rate": int(os.getenv("SARVAM_TTS_SAMPLE_RATE", "8000")),  # Telephony (Twilio)
         }
-    
-    raise ValueError(f"Unknown TTS_PROVIDER: {TTS_PROVIDER}")
+
+    raise ValueError(f"Unknown TTS_PROVIDER: {TTS_PROVIDER}. Only 'sarvam' is supported.")
 
 
 def get_llm_client_config() -> Tuple[str, str, Optional[str]]:
