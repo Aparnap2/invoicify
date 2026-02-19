@@ -1,0 +1,247 @@
+# Docker Compose - Full Local Stack for Invoicify
+# Includes: Cosmos DB emulator, SQL Server, Redis, Mockoon, Ollama, Qdrant
+# 
+# Usage:
+#   docker-compose -f docker-compose.full.yml up -d
+#   docker-compose -f docker-compose.full.yml down
+
+services:
+  # ───────────────────────────────────────────────────────────────────────────
+  # AZURE EMULATORS
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # Cosmos DB Emulator (MongoDB API)
+  cosmos-emulator:
+    image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:mongodb
+    container_name: invoicify-cosmos
+    ports:
+      - "8081:8081"   # Cosmos DB UI
+      - "10255:10255" # MongoDB API
+      - "10251:10251" # SQL API
+    environment:
+      AZURE_COSMOS_EMULATOR_PARTITION_COUNT: 10
+      AZURE_COSMOS_EMULATOR_ENABLE_DATA_PERSISTENCE: "true"
+      AZURE_COSMOS_EMULATOR_ENABLE_MONGODB_ENDPOINT: "true"
+    volumes:
+      - cosmos_data:/tmp/cosmos/appdata
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/_explorer/index.html"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # SQL Server (Azure SQL local emulator)
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: invoicify-sql
+    ports:
+      - "1433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "DevPass123!"
+      MSSQL_PID: Developer
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+      - ./scripts/azure_sql_schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P 'DevPass123!' -Q 'SELECT 1'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # CACHING & MESSAGE QUEUE
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # Redis (Trust Battery cache, session store)
+  redis:
+    image: redis:7-alpine
+    container_name: invoicify-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # AI/ML SERVICES
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # Ollama (Local LLM for development)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: invoicify-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Qdrant (Vector database for RAG)
+  qdrant:
+    image: qdrant/qdrant:v1.10.1
+    container_name: invoicify-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # API MOCKS
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # Mockoon (Mock Azure services: Event Grid, QuickBooks, SignalR, etc.)
+  mockoon:
+    image: mockoon/cli:latest
+    container_name: invoicify-mockoon
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./mocks/mockoon-env.json:/data/mockoon-env.json
+    command: ["--data", "/data/mockoon-env.json", "--port", "3001", "--hostname", "0.0.0.0"]
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # APPLICATION SERVICES
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # Agent Core (FastAPI - main processing pipeline)
+  agent-core:
+    build:
+      context: ./apps/agent-core
+      dockerfile: Dockerfile
+    container_name: invoicify-agent-core
+    ports:
+      - "8000:8000"
+    environment:
+      # Database connections
+      DATABASE_URL: Server=sqlserver,1433;Database=invoicify;User=sa;Password=DevPass123!;TrustServerCertificate=true
+      COSMOS_DB_URL: mongodb://cosmos-emulator:10255
+      COSMOS_DB_KEY: C2y6yDjf5/R+ob0N8A7Cgv30VRDJIWEHLM+4QDU5DE2nQ9nDuVTqobD4b8mGGyPMbIZnqyMcpkfkCViLHxUXoA==
+      REDIS_URL: redis://redis:6379
+      
+      # AI services
+      AZURE_SEARCH_ENDPOINT: http://qdrant:6333
+      LLM_PROVIDER: ollama  # Use local Ollama for dev
+      OLLAMA_BASE_URL: http://ollama:11434
+      
+      # Mocked services via Mockoon
+      EVENT_GRID_ENDPOINT: http://mockoon:3001/eventgrid
+      QUICKBOOKS_BASE_URL: http://mockoon:3001/v3/company
+      SIGNALR_CONNECTION_STRING: Endpoint=http://mockoon:3001;AccessKey=devkey
+      
+      # App config
+      APP_ENV: development
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ./apps/agent-core:/app
+      - /app/.venv
+    depends_on:
+      cosmos-emulator:
+        condition: service_healthy
+      sqlserver:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      mockoon:
+        condition: service_healthy
+    networks:
+      - invoicify
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # OBSERVABILITY
+  # ───────────────────────────────────────────────────────────────────────────
+
+  # Prometheus (Metrics scraping)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: invoicify-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.dev.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - invoicify
+
+  # Grafana (Dashboards)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: invoicify-grafana
+    ports:
+      - "3002:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - ./config/grafana/dashboards:/etc/grafana/dashboards
+      - ./config/grafana/datasources:/etc/grafana/provisioning/datasources
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - invoicify
+
+  # Jaeger (Distributed tracing)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: invoicify-jaeger
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    networks:
+      - invoicify
+
+networks:
+  invoicify:
+    driver: bridge
+
+volumes:
+  cosmos_data:
+  sqlserver_data:
+  redis_data:
+  ollama_data:
+  qdrant_storage:
+  prometheus_data:
+  grafana_data:

@@ -1,0 +1,130 @@
+# Docker Compose - Voice AI Layer for Invoicify
+# Run with: docker compose -f docker-compose.yml -f docker-compose.voice.yml up
+#
+# LOCAL DEV STACK (Zero Cost):
+# - STT: open-sarika (Whisper-large-v3 fine-tuned for Hindi/Gujarati/Marathi)
+# - TTS: Kokoro FastAPI (CPU-based, OpenAI-compatible)
+# - LLM: Ollama qwen2.5:7b (Hindi/English bilingual)
+#
+# PROD SWAP (via environment variables):
+# - STT_PROVIDER=sarvam → Sarvam Saaras v3 API
+# - TTS_PROVIDER=modal → Kokoro on Modal GPU
+# - LLM_PROVIDER=azure_foundry → Azure GPT-4o
+
+services:
+  # ───────────────────────────────────────────────────────────────────────────
+  # TTS: Kokoro FastAPI (OpenAI-compatible)
+  # ───────────────────────────────────────────────────────────────────────────
+  kokoro-tts:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.2
+    container_name: invoicify-kokoro
+    ports:
+      - "8880:8880"
+    environment:
+      - KOKORO_DEFAULT_VOICE=af_heart
+      - KOKORO_DEFAULT_SPEED=1.1
+      - KOKORO_DEFAULT_LANG=en
+    # OpenAI-compatible API:
+    # POST /v1/audio/speech → WAV bytes
+    # GET  /v1/voices       → available voices
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8880/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # STT: open-sarika (Whisper-large-v3 fine-tuned for Indian languages)
+  # ───────────────────────────────────────────────────────────────────────────
+  open-sarika-stt:
+    build:
+      context: ./docker/open-sarika
+      dockerfile: Dockerfile
+    container_name: invoicify-sarika
+    ports:
+      - "8881:8881"
+    environment:
+      - MODEL_NAME=theharshithh/open-sarika
+      - SUPPORTED_LANGUAGES=hi,gu,mr,en
+      - DEVICE=cpu
+    volumes:
+      - open_sarika_models:/root/.cache/huggingface
+    # Note: First start downloads ~3GB model weights
+    # Subsequent starts use cached volume
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8881/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # Model loading time
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # STT Fallback: faster-whisper (English / simple Hindi)
+  # ───────────────────────────────────────────────────────────────────────────
+  faster-whisper:
+    image: fedirz/faster-whisper-server:latest-cpu
+    container_name: invoicify-whisper
+    ports:
+      - "8882:8000"
+    environment:
+      - WHISPER__MODEL=large-v3
+      - WHISPER__LANGUAGE=hi
+    volumes:
+      - whisper_models:/root/.cache/whisper
+    # OpenAI-compatible at localhost:8882
+    # POST /v1/audio/transcriptions
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # LLM: Ollama (qwen2.5:7b for Hindi/English conversation)
+  # ───────────────────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: invoicify-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    # After start: docker exec invoicify-ollama ollama pull qwen2.5:7b
+
+volumes:
+  open_sarika_models:
+  whisper_models:
+  ollama_models:
+
+networks:
+  invoicify:
+    external: true

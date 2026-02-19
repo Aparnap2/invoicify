@@ -1,28 +1,48 @@
-name = "invoicify-worker"
+# Cloudflare Workers Configuration
+# https://developers.cloudflare.com/workers/wrangler/configuration/
+
+name = "invoicify-edge-api"
 main = "src/index.ts"
-compatibility_date = "2025-01-01"
+compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 
-# D1 Database
+# Environment variables
+[vars]
+APP_ENV = "development"
+ENTRA_JWT_ISSUER = "https://invoicify.b2clogin.com/{tenant-id}/v2.0/"
+ENTRA_JWT_AUDIENCE = "api://invoicify-edge-api"
+
+# R2 Bucket for PDF storage
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "invoicify-invoices"
+
+# D1 Database for metadata
 [[d1_databases]]
 binding = "DB"
-database_name = "invoicify-db"
-database_id = "your-database-id-here"
+database_name = "invoicify-edge"
+database_id = "YOUR_DATABASE_ID"  # Replace after creating with: wrangler d1 create invoicify-edge
 
-# R2 Storage
-[[r2_buckets]]
-binding = "R2_BUCKET"
-bucket_name = "invoicify-storage"
-
-# KV for session/cache
+# KV Namespace for rate limiting
 [[kv_namespaces]]
-binding = "CACHE"
-id = "your-kv-id-here"
+binding = "KV_STORE"
+id = "YOUR_KV_ID"  # Replace after creating with: wrangler kv:namespace create invoicify-rate-limit
 
-[vars]
-ENVIRONMENT = "development"
+# Secrets (set via wrangler secret put)
+# EVENT_GRID_ENDPOINT
+# EVENT_GRID_KEY
 
-# Secrets (set via: wrangler secret put <NAME>)
-# GROQ_API_KEY
-# QUICKBOOKS_CLIENT_ID
-# QUICKBOOKS_CLIENT_SECRET
+# Development settings
+[dev]
+port = 8787
+local_protocol = "http"
+
+# Production settings
+[production]
+routes = [
+  { pattern = "invoicify-edge.example.com/*", zone_name = "example.com" }
+]
+
+# Migrations for D1
+# Run: wrangler d1 migrations create invoicify-edge migration_name
+# Run: wrangler d1 migrations apply invoicify-edge

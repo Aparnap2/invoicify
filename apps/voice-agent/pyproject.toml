@@ -1,0 +1,21 @@
+[project]
+name = "invoicify-voice-agent"
+version = "0.1.0"
+description = "Voice agent for vendor calls using Pipecat"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.129.0",
+    "httpx>=0.28.1",
+    "openai>=1.0.0",
+    "pipecat-ai>=0.0.1",
+    "pydantic>=2.12.5",
+    "structlog>=25.5.0",
+    "uvicorn>=0.40.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
