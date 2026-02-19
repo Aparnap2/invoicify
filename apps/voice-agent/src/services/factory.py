@@ -1,20 +1,20 @@
 """
-Service factory for Voice Agent — Sarvam-only for STT/TTS.
+Service factory for Voice Agent — Sarvam-only for STT/TTS, Azure AI for LLM.
 
-Dev uses Sarvam API (free credits).
-Prod uses Sarvam API (paid).
+Dev uses Sarvam API (free credits) + Azure AI Foundry.
+Prod uses Sarvam API (paid) + Azure AI Foundry.
 ZERO code changes between environments.
 
 Usage:
-    # Local dev (Sarvam free tier)
+    # Local dev (Sarvam + Azure AI)
     STT_PROVIDER=sarvam
     TTS_PROVIDER=sarvam
-    LLM_PROVIDER=ollama
+    LLM_PROVIDER=azure
     
-    # Production (Sarvam paid + Azure Foundry)
+    # Production (same config)
     STT_PROVIDER=sarvam
     TTS_PROVIDER=sarvam
-    LLM_PROVIDER=azure_foundry
+    LLM_PROVIDER=azure
 """
 
 import os
@@ -27,7 +27,7 @@ logger = structlog.get_logger()
 # NOTE: Sarvam-only for STT/TTS (no Kokoro, no local Docker)
 STT_PROVIDER = os.getenv("STT_PROVIDER", "sarvam")  # sarvam only
 TTS_PROVIDER = os.getenv("TTS_PROVIDER", "sarvam")  # sarvam only
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")  # ollama | azure_foundry | groq
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "azure")  # azure (OpenAI SDK)
 
 
 def get_stt_service_config() -> Dict[str, Any]:
@@ -79,35 +79,28 @@ def get_tts_service_config() -> Dict[str, Any]:
 def get_llm_client_config() -> Tuple[str, str, Optional[str]]:
     """
     Get LLM client configuration.
-    
+    Uses Azure AI Foundry via OpenAI SDK for easy provider swapping.
+
     Returns:
         Tuple of (provider_type, model_name, base_url)
     """
-    if LLM_PROVIDER == "ollama":
-        # Local Ollama — OpenAI-compatible
-        return (
-            "openai_compatible",
-            os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
-            os.getenv("OLLAMA_BASE_URL", "http://ollama:11434/v1"),
-        )
-    
-    elif LLM_PROVIDER == "azure_foundry":
-        # Azure OpenAI Foundry
+    if LLM_PROVIDER == "azure":
+        # Azure AI Foundry via OpenAI SDK
         return (
             "azure",
             os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o"),
             os.getenv("AZURE_OPENAI_ENDPOINT"),
         )
-    
-    elif LLM_PROVIDER == "groq":
-        # Groq API
+
+    elif LLM_PROVIDER == "ollama":
+        # Local Ollama — OpenAI-compatible (fallback for offline dev)
         return (
-            "groq",
-            os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-            "https://api.groq.com/openai/v1",
+            "openai_compatible",
+            os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
+            os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
         )
-    
-    raise ValueError(f"Unknown LLM_PROVIDER: {LLM_PROVIDER}")
+
+    raise ValueError(f"Unknown LLM_PROVIDER: {LLM_PROVIDER}. Use 'azure' or 'ollama'.")
 
 
 class VoiceServiceFactory:
@@ -283,15 +276,15 @@ class VoiceServiceFactory:
         return SarvamTTS(config)
     
     def _create_llm_client(self, provider: str, model: str, base_url: Optional[str]):
-        """Create LLM client based on provider."""
-        if provider == "openai_compatible":
-            from openai import AsyncOpenAI
-            return AsyncOpenAI(
-                api_key="ollama",
-                base_url=base_url,
-            ), model
+        """
+        Create LLM client using OpenAI SDK.
         
-        elif provider == "azure":
+        Supports:
+        - azure: Azure AI Foundry via AsyncAzureOpenAI
+        - openai_compatible: Ollama or other OpenAI-compatible APIs
+        """
+        if provider == "azure":
+            # Azure AI Foundry via OpenAI SDK
             from openai import AsyncAzureOpenAI
             import os
             return AsyncAzureOpenAI(
@@ -299,15 +292,16 @@ class VoiceServiceFactory:
                 api_version="2024-08-01-preview",
                 azure_endpoint=base_url,
             ), model
-        
-        elif provider == "groq":
+
+        elif provider == "openai_compatible":
+            # Ollama or other OpenAI-compatible APIs
             from openai import AsyncOpenAI
             return AsyncOpenAI(
-                api_key=os.getenv("GROQ_API_KEY"),
+                api_key="ollama",  # Not used for Ollama
                 base_url=base_url,
             ), model
-        
-        raise ValueError(f"Unknown LLM provider: {provider}")
+
+        raise ValueError(f"Unknown LLM provider: {provider}. Use 'azure' or 'openai_compatible'.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
