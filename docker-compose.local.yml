@@ -115,4 +115,4 @@ volumes:
 
 networks:
   invoicify:
-    external: true
+    driver: bridge
