@@ -1,21 +1,30 @@
 #!/bin/bash
-# Stop all invoicify containers
+# Stop All Invoicify Services
 
-echo "🛑 Stopping all invoicify containers..."
+set -e
 
-containers=(
-    "invoicify-minio"
-    "invoicify-ollama"
-    "invoicify-qbo-mock"
-    "invoicify-postgres"
-    "invoicify-kafka"
-)
+echo "🛑 Stopping Invoicify Services..."
+echo ""
 
-for container in "${containers[@]}"; do
-    if docker ps | grep -q $container; then
-        echo "  Stopping $container..."
-        docker stop $container
-    fi
-done
+# Stop services in reverse order
+echo "Stopping Event Grid Emulator..."
+docker stop invoicify-event-grid 2>/dev/null || echo "  (not running)"
 
-echo "✅ All containers stopped"
+echo "Stopping Azurite..."
+docker stop invoicify-azurite 2>/dev/null || echo "  (not running)"
+
+echo "Stopping Qdrant..."
+docker stop invoicify-qdrant 2>/dev/null || echo "  (not running)"
+
+echo "Stopping Redis..."
+docker stop invoicify-redis 2>/dev/null || echo "  (not running)"
+
+echo "Stopping Ollama..."
+docker stop ollama 2>/dev/null || echo "  (not running)"
+
+echo ""
+echo "✅ All services stopped!"
+echo ""
+echo "Remaining containers:"
+docker ps --filter "name=invoicify" --filter "name=ollama" --format "table {{.Names}}\t{{.Status}}" || echo "  (none)"
+echo ""
