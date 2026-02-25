@@ -5,13 +5,14 @@ node_modules/
 .venv/
 venv/
 env/
+
 # Environment
 .env*
+!.env.example
 .dev.vars
 .vars
 .env.local
 .env.*.local
-!.env.example
 
 # JSON & Secrets
 *.json
@@ -20,14 +21,39 @@ env/
 !tsconfig.json
 !pyproject.toml
 !wrangler.toml
+*.key
+*.pem
+*.crt
+*.secret
+*.password
+secrets/
+.secrets.baseline
+
+# IDE & OS
 .next/
 out/
 build/
 dist/
-
-# OS files
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.log
+
+# Test & Coverage
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+*.cover
+
+# Docker
+*.pid
+*.seed
+*.pid.lock
 *.pem
 
 # Logs
