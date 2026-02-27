@@ -1,7 +1,7 @@
 """Context Agent - Gathers context from multiple sources."""
 
 from typing import Any
-from ..types.schemas import InvoiceState
+from src.types import InvoiceState
 
 
 class ContextAgent:

@@ -1,0 +1,56 @@
+{
+    "name": "Invoicify External APIs",
+    "port": 3001,
+    "routes": [
+        {
+            "method": "post",
+            "endpoint": "/services/oauth2/token",
+            "responses": [
+                {
+                    "statusCode": 200,
+                    "body": "{\"access_token\": \"mock_sf_token\", \"instance_url\": \"https://mock.salesforce.com\"}"
+                }
+            ]
+        },
+        {
+            "method": "get",
+            "endpoint": "/services/data/v58.0/query",
+            "responses": [
+                {
+                    "statusCode": 200,
+                    "body": "{\"totalSize\": 1, \"records\": [{\"Id\": \"001xx\", \"ContractNumber\": \"C-12345\", \"Status\": \"Activated\"}]}"
+                }
+            ]
+        },
+        {
+            "method": "post",
+            "endpoint": "/oauth2/token",
+            "responses": [
+                {
+                    "statusCode": 200,
+                    "body": "{\"access_token\": \"mock_qbo_token\", \"refresh_token\": \"mock_refresh\"}"
+                }
+            ]
+        },
+        {
+            "method": "get",
+            "endpoint": "/v3/company/:realmId/query",
+            "responses": [
+                {
+                    "statusCode": 200,
+                    "body": "{\"QueryResponse\": {\"Bill\": []}}"
+                }
+            ]
+        },
+        {
+            "method": "post",
+            "endpoint": "/v3/company/:realmId/bill",
+            "responses": [
+                {
+                    "statusCode": 200,
+                    "body": "{\"Bill\": {\"Id\": \"123\", \"DocNumber\": \"BILL-001\"}}"
+                }
+            ]
+        }
+    ]
+}

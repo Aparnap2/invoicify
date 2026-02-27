@@ -2,7 +2,7 @@
 
 import os
 from typing import Any
-from ..types.schemas import InvoiceState
+from src.types import InvoiceState
 
 
 class VisionAgent:

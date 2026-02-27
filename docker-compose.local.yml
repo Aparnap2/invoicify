@@ -1,0 +1,207 @@
+# Docker Compose - Local Development Stack (100% Docker, Zero Azure)
+# 
+# Run: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+# Services:
+# - Event Grid Emulator (mimics Azure Event Grid)
+# - Qdrant (local RAG, mimics Azure AI Search)
+# - Ollama (local LLM for embeddings + fallback)
+# - Parakeet STT (local speech-to-text)
+# - Kitten TTS (local text-to-speech)
+# - Voice Agent (FastAPI webhook receiver)
+# - Agent Core (FastAPI invoice processing)
+#
+# All services communicate via Docker internal DNS.
+# Zero Azure credentials needed for local dev.
+
+services:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Event Grid Emulator (mimics Azure Event Grid behavior)
+  # ───────────────────────────────────────────────────────────────────────────
+  event-grid-emulator:
+    image: python:3.11-slim
+    container_name: invoicify-event-grid
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./mocks/event_grid_emulator.py:/app/main.py
+    command: >
+      bash -c "pip install fastapi uvicorn httpx structlog pydantic && 
+      uvicorn main:app --host 0.0.0.0 --port 8080"
+    environment:
+      # Push events to Voice Agent container
+      - WEBHOOK_SUBSCRIBERS=http://voice-agent:8001/api/events
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Qdrant (Local Vector DB for RAG - mimics Azure AI Search)
+  # ───────────────────────────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: invoicify-qdrant
+    ports:
+      - "6333:6333"  # REST API
+      - "6334:6334"  # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Ollama (Local LLM for embeddings + fallback)
+  # ───────────────────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: invoicify-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # Pull embedding model on startup
+    command: >
+      bash -c "ollama serve & 
+      sleep 5 && 
+      ollama pull nomic-embed-text || true"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Parakeet STT (LinTO NeMo - Local Speech-to-Text)
+  # ───────────────────────────────────────────────────────────────────────────
+  parakeet-stt:
+    image: lintoai/linto-stt-nemo:latest
+    container_name: invoicify-parakeet
+    ports:
+      - "80:80"  # WebSocket endpoint
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # Note: First start downloads ~2GB model
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Kitten TTS (Local Text-to-Speech - OpenAI-compatible API)
+  # ───────────────────────────────────────────────────────────────────────────
+  kitten-tts:
+    image: ghcr.io/remsky/kitten-tts-server:latest
+    container_name: invoicify-kitten
+    ports:
+      - "8081:8081"
+    environment:
+      - KITTEN_PORT=8081
+      - KITTEN_DEFAULT_VOICE=female1
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Voice Agent (FastAPI Webhook Receiver + Pipecat Pipeline)
+  # ───────────────────────────────────────────────────────────────────────────
+  voice-agent:
+    build:
+      context: ./apps/voice-agent
+      dockerfile: Dockerfile
+    container_name: invoicify-voice-agent
+    ports:
+      - "8001:8001"
+    environment:
+      - ENVIRONMENT=local
+      - VOICE_AGENT_PORT=8001
+      # Local Docker services
+      - KITTEN_TTS_URL=http://kitten-tts:8081/v1/audio/speech
+      - PARAKEET_STT_URL=ws://parakeet-stt:80/streaming
+      - QDRANT_URL=http://qdrant:6333
+      - OLLAMA_URL=http://ollama:11434
+      # Azure AI (real API - works locally)
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-oss-120b}
+      # Groq (fallback LLM)
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+    volumes:
+      - ./apps/voice-agent/src:/app/src
+    depends_on:
+      event-grid-emulator:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Agent Core (FastAPI Invoice Processing)
+  # ───────────────────────────────────────────────────────────────────────────
+  agent-core:
+    build:
+      context: ./apps/agent-core
+      dockerfile: Dockerfile
+    container_name: invoicify-agent-core
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=local
+      # Event Grid (local emulator)
+      - LOCAL_EVENT_GRID_URL=http://event-grid-emulator:8080/api/events
+      # Database
+      - DATABASE_URL=Server=azure-sql,1433;Database=invoicify;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True
+      - COSMOS_DB_URL=mongodb://cosmos-emulator:8081
+      - COSMOS_DB_KEY=${COSMOS_DB_KEY}
+      - REDIS_URL=redis://redis:6379
+      # RAG
+      - QDRANT_URL=http://qdrant:6333
+      # LLM
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-oss-120b}
+    volumes:
+      - ./apps/agent-core/src:/app/src
+    depends_on:
+      event-grid-emulator:
+        condition: service_healthy
+      voice-agent:
+        condition: service_healthy
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  qdrant_data:
+  ollama_data:
+
+networks:
+  invoicify:
+    driver: bridge

@@ -28,4 +28,12 @@ dependencies = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "redis>=5.0.0",
+    "reportlab>=4.4.10",
+    "azure-storage-blob>=12.28.0",
+    "asyncpg>=0.31.0",
+    "openai>=2.20.0",
+    "pyodbc>=5.3.0",
+    "upstash-redis>=1.6.0",
+    "upstash-ratelimit>=1.1.0",
+    "sarvamai>=0.1.25",
 ]

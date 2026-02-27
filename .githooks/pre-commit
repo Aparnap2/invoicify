@@ -1,0 +1,30 @@
+#!/bin/bash
+# Pre-commit hook for secret detection
+# Install: cp .githooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+set -e
+
+echo "Running secret detection..."
+
+# Patterns to detect
+PATTERNS='sk-or-v1-[0-9a-f]{64}|sk-[0-9a-zA-Z]{48}|ghp_[0-9a-zA-Z]{36}|AKIA[0-9A-Z]{16}'
+
+FOUND=0
+
+if git diff --cached --name-only | xargs grep -l -E "$PATTERNS" 2>/dev/null; then
+    echo ""
+    echo "COMMIT BLOCKED: Potential secrets detected!"
+    echo ""
+    echo "Please remove secrets from staged files."
+    echo "Use environment variables or .env files instead."
+    echo ""
+    echo "To bypass (false positive): git commit --no-verify"
+    echo ""
+    FOUND=1
+fi
+
+if [ $FOUND -eq 0 ]; then
+    echo "No secrets detected"
+fi
+
+exit $FOUND

@@ -1,0 +1,41 @@
+# Docker Compose - Voice AI Layer for Invoicify
+# Run with: docker compose -f docker-compose.yml -f docker-compose.voice.yml up
+#
+# SARVAM-ONLY STACK (API-based):
+# - STT: Sarvam Saaras v3 API
+# - TTS: Sarvam Bulbul v3 API
+# - LLM: Ollama qwen2.5:7b (Hindi/English bilingual)
+#
+# Note: No local Docker containers for STT/TTS - all via Sarvam API
+# Set SARVAM_API_KEY in .env.local
+
+services:
+  # ───────────────────────────────────────────────────────────────────────────
+  # LLM: Ollama (qwen2.5:7b for Hindi/English conversation)
+  # ───────────────────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: invoicify-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - invoicify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    # After start: docker exec invoicify-ollama ollama pull qwen2.5:7b
+
+volumes:
+  ollama_models:
+
+networks:
+  invoicify:
+    driver: bridge

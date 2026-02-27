@@ -1,0 +1,25 @@
+# Azure Functions Python Dependencies
+# Replaces Cloudflare Workers + Hono with Azure Functions
+
+# Azure SDKs
+azure-functions>=1.18.0
+azure-storage-blob>=12.19.0
+azure-identity>=1.15.0
+azure-keyvault-secrets>=4.8.0
+
+# Database
+asyncpg>=0.29.0  # PostgreSQL/local SQL Server
+pyodbc>=5.1.0    # Azure SQL with ODBC
+
+# HTTP client for Event Grid
+aiohttp>=3.9.0
+
+# Logging
+structlog>=24.1.0
+
+# Type hints
+pydantic>=2.5.0
+
+# For FastAPI integration (optional)
+fastapi>=0.109.0
+uvicorn>=0.27.0
