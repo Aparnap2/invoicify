@@ -1,39 +1,52 @@
-# Dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+# INVOICIFY COMPREHENSIVE .GITIGNORE
+# Prevents secrets, build artifacts, and sensitive files from being committed
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Dependencies ────────────────────────────────────────────────────────────
 node_modules/
 .pnp
 .pnp.*
 .venv/
 venv/
 env/
+vendor/
+bundle/
 
-# Environment
+# ── Environment & Secrets ───────────────────────────────────────────────────
 .env*
 !.env.example
 .dev.vars
 .vars
 .env.local
 .env.*.local
-
-# JSON & Secrets
-*.json
-!package.json
-!package-lock.json
-!tsconfig.json
-!pyproject.toml
-!wrangler.toml
-*.key
 *.pem
+*.key
 *.crt
 *.secret
 *.password
 secrets/
 .secrets.baseline
+*.credentials
+*credentials.json
+*service-account.json
 
-# IDE & OS
+# ── Build Artifacts ─────────────────────────────────────────────────────────
 .next/
 out/
 build/
 dist/
+*.so
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+*.tsbuildinfo
+.turbo/
+.vercel/
+.wrangler/
+
+# ── IDE & Editor ────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 *.swp
@@ -42,88 +55,67 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+.stylelintcache
+.cache/
 
-# Test & Coverage
+# ── Test & Coverage ─────────────────────────────────────────────────────────
 coverage/
 .coverage
 htmlcov/
 .pytest_cache/
 *.cover
+test-results/
+.deepeval/
 
-# Docker
-*.pid
-*.seed
-*.pid.lock
-*.pem
+# ── Database ────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
 
-# Logs
-*.log
+# ── Cloud & Deployment ──────────────────────────────────────────────────────
+.azure/
+.aws/
+.gcp/
+*.tfstate
+*.tfplan
+
+# ── Python Specific ─────────────────────────────────────────────────────────
+__pycache__/
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ── Node.js Specific ────────────────────────────────────────────────────────
+.pnpm-store/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
 
-# TypeScript
+# ── Docker ──────────────────────────────────────────────────────────────────
+*.pid
+*.seed
+*.pid.lock
+
+# ── TypeScript ──────────────────────────────────────────────────────────────
 *.tsbuildinfo
 
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Database
-*.db
-*.sqlite
-
-# Cloudflare
-.wrangler/
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-*.egg-info/
-dist/
-build/
-eggs/
-.part
-.pytest_cache/
-.coverage
-.pytest_cache/
-htmlcov/
-.eggs/
-*.egg
-*.egg-info/
-dist/
-build/
-
-# uv
-.venv/
-
-# DeepEval
-.deepeval/
-
-# Test results
-test-results/
-
-# Environment (specific)
-!.env.example
-.env.local
-.env.*.local
-
-# Turbopack
-.turbo/
-
-# Vercel
-.vercel/
-
-# pnpm
-.pnpm-store/
-
-# Cache
-.cache/
-.eslintcache
-.stylelintcache
+# ── uv (Python Package Manager) ─────────────────────────────────────────────
+.uv/

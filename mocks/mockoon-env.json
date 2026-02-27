@@ -1,0 +1,80 @@
+{
+  "uuid": "invoicify-mocks",
+  "name": "Invoicify Local Mocks",
+  "port": 3001,
+  "hostname": "0.0.0.0",
+  "routes": [
+    {
+      "uuid": "event-grid",
+      "method": "post",
+      "endpoint": "eventgrid",
+      "responses": [{
+        "uuid": "eg-200",
+        "statusCode": 200,
+        "body": ""
+      }]
+    },
+    {
+      "uuid": "azure-search-query",
+      "method": "post",
+      "endpoint": "indexes/invoices_knowledge/docs/search",
+      "responses": [{
+        "uuid": "search-200",
+        "statusCode": 200,
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"value\": [], \"@odata.count\": 0}"
+      }]
+    },
+    {
+      "uuid": "azure-search-upload",
+      "method": "post",
+      "endpoint": "indexes/invoices_knowledge/docs/index",
+      "responses": [{
+        "uuid": "upload-200",
+        "statusCode": 200,
+        "body": "{\"value\": [{\"key\": \"test\", \"status\": true}]}"
+      }]
+    },
+    {
+      "uuid": "quickbooks-bill",
+      "method": "post",
+      "endpoint": "v3/company/:companyId/bill",
+      "responses": [{
+        "uuid": "qb-200",
+        "statusCode": 200,
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"Bill\": {\"Id\": \"mock-bill-{{faker 'string.nanoid'}}\", \"SyncToken\": \"0\"}}"
+      }]
+    },
+    {
+      "uuid": "twilio-call",
+      "method": "post",
+      "endpoint": "2010-04-01/Accounts/:sid/Calls.json",
+      "responses": [{
+        "uuid": "twilio-200",
+        "statusCode": 201,
+        "body": "{\"sid\": \"CA{{faker 'string.alphanumeric' 32}}\", \"status\": \"queued\"}"
+      }]
+    },
+    {
+      "uuid": "signalr-send",
+      "method": "post",
+      "endpoint": "api/hubs/:hub/groups/:group/messages",
+      "responses": [{
+        "uuid": "sr-200",
+        "statusCode": 202,
+        "body": ""
+      }]
+    },
+    {
+      "uuid": "health",
+      "method": "get",
+      "endpoint": "health",
+      "responses": [{
+        "uuid": "health-200",
+        "statusCode": 200,
+        "body": "{\"status\": \"ok\"}"
+      }]
+    }
+  ]
+}
