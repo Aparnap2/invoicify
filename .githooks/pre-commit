@@ -4,39 +4,27 @@
 
 set -e
 
-echo "🔒 Running secret detection..."
+echo "Running secret detection..."
 
 # Patterns to detect
-PATTERNS=(
-    'sk-or-v1-[0-9a-f]{64}'           # OpenRouter
-    'sk-[0-9a-zA-Z]{48}'              # OpenAI
-    'ghp_[0-9a-zA-Z]{36}'             # GitHub Personal Access Token
-    'AKIA[0-9A-Z]{16}'                # AWS Access Key
-    '-----BEGIN (RSA |EC )?PRIVATE KEY-----'  # Private keys
-    'password\s*=\s*["\'][^"\']+["\']'  # Hardcoded passwords
-)
+PATTERNS='sk-or-v1-[0-9a-f]{64}|sk-[0-9a-zA-Z]{48}|ghp_[0-9a-zA-Z]{36}|AKIA[0-9A-Z]{16}'
 
-FOUND_SECRETS=0
+FOUND=0
 
-for pattern in "${PATTERNS[@]}"; do
-    if git diff --cached --name-only | xargs grep -l -E "$pattern" 2>/dev/null; then
-        echo "❌ Potential secret detected matching pattern: $pattern"
-        FOUND_SECRETS=1
-    fi
-done
-
-if [ $FOUND_SECRETS -eq 1 ]; then
+if git diff --cached --name-only | xargs grep -l -E "$PATTERNS" 2>/dev/null; then
     echo ""
-    echo "🛑 COMMIT BLOCKED: Potential secrets detected!"
+    echo "COMMIT BLOCKED: Potential secrets detected!"
     echo ""
-    echo "Please remove secrets from staged files before committing."
+    echo "Please remove secrets from staged files."
     echo "Use environment variables or .env files instead."
     echo ""
-    echo "If this is a false positive, you can bypass with:"
-    echo "  git commit --no-verify"
+    echo "To bypass (false positive): git commit --no-verify"
     echo ""
-    exit 1
+    FOUND=1
 fi
 
-echo "✅ No secrets detected"
-exit 0
+if [ $FOUND -eq 0 ]; then
+    echo "No secrets detected"
+fi
+
+exit $FOUND

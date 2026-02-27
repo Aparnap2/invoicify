@@ -89,10 +89,23 @@ Built with **Azure-native architecture**, **Sarvam AI** for Indian languages, an
 # Copy example config
 cp apps/agent-core/.env.example apps/agent-core/.env.local
 
+# Add your Sarvam AI API key (get from https://platform.sarvam.ai)
+echo "SARVAM_AI_API_KEY=your_key_here" >> apps/agent-core/.env.local
+
 # Choose extraction mode
 export EXTRACTOR_MODE=fixture    # Fastest (0.01ms) - for queue testing
 export EXTRACTOR_MODE=ollama     # Local AI (3-10s) - full dev
 export EXTRACTOR_MODE=sarvam     # Production (2-3s) - needs API keys
+```
+
+### 2.5 Test Sarvam AI API (Optional but Recommended)
+
+```bash
+# Test with curl first
+./scripts/test-sarvam-api.sh your_api_key
+
+# Or full E2E test
+./scripts/test-real-e2e.sh
 ```
 
 ### 3. Run Agent Core
@@ -119,7 +132,7 @@ python -c "from src.extraction import extract_invoice; import asyncio; print(asy
 
 ## 🧪 Test Suite
 
-**51 TDD Tests Passing**
+**51 TDD Tests Passing (Unit Tests with Mocks)**
 
 ```bash
 # Run all tests
@@ -131,6 +144,21 @@ PYTHONPATH=. uv run pytest tests/tdd/ -v
 # test_intake_router.py     - 21 tests (dedup, rate limit, priority)
 # test_production_components.py - 17 tests (QStash, QB, cache, audit)
 ```
+
+**Real API E2E Tests (Requires API Key)**
+
+```bash
+# 1. Test Sarvam API with curl first
+./scripts/test-sarvam-api.sh YOUR_API_KEY
+
+# 2. Full E2E with real Sarvam API + Docker
+./scripts/test-real-e2e.sh
+
+# 3. Python E2E tests
+PYTHONPATH=. uv run pytest tests/e2e/test_real_sarvam_e2e.py -v -s
+```
+
+**Note:** Unit tests use mocks. For real API testing, set `SARVAM_AI_API_KEY` in `.env.local`.
 
 ---
 

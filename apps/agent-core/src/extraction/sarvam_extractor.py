@@ -337,8 +337,8 @@ OCR MARKDOWN:
         """
         Call Sarvam Vision API for document intelligence.
         
-        Returns high-fidelity Markdown preserving tables, reading order,
-        and complex layouts (critical for Indian GST invoices).
+        Uses official Sarvam AI SDK with job-based processing.
+        Returns high-fidelity HTML/Markdown preserving tables and layout.
         """
         logger.info("sarvam_ocr_started", invoice_id=invoice_id)
         
@@ -346,53 +346,162 @@ OCR MARKDOWN:
             logger.warning("sarvam_key_missing_falling_back_to_local")
             return await self._local_ocr_lighton(file_path)
         
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            # Try official Sarvam AI SDK first
             try:
-                with open(file_path, "rb") as f:
-                    response = await client.post(
-                        self.SARVAM_VISION_URL,
+                from sarvamai import SarvamAI
+                return await self._ocr_with_sarvam_sdk(file_path, invoice_id)
+            except ImportError:
+                logger.info("sarvamai_sdk_not_installed_falling_back_to_http")
+                return await self._ocr_with_sarvam_http(file_path, invoice_id)
+                
+        except Exception as e:
+            logger.error(
+                "sarvam_unexpected_error",
+                invoice_id=invoice_id,
+                error=str(e),
+            )
+            # Fallback to local OCR
+            return await self._local_ocr_lighton(file_path)
+    
+    async def _ocr_with_sarvam_sdk(self, file_path: str, invoice_id: str) -> str:
+        """
+        Use official Sarvam AI SDK for document intelligence.
+        
+        Job-based async processing:
+        1. Create job
+        2. Upload file
+        3. Start processing
+        4. Wait for completion
+        5. Download output
+        """
+        from sarvamai import SarvamAI
+        import tempfile
+        import zipfile
+        from pathlib import Path
+        
+        logger.info("sarvam_sdk_ocr_started", invoice_id=invoice_id)
+        
+        # Initialize client
+        client = SarvamAI(api_subscription_key=self.sarvam_api_key)
+        client.document_intelligence.initialise()
+        
+        # Create job
+        job = client.document_intelligence.create_job(
+            language="en-IN",
+            output_format="html"
+        )
+        logger.info("sarvam_job_created", job_id=job.job_id)
+        
+        # Upload document
+        job.upload_file(file_path)
+        logger.info("sarvam_file_uploaded", file_path=file_path)
+        
+        # Start processing
+        job.start()
+        logger.info("sarvam_job_started")
+        
+        # Wait for completion
+        status = job.wait_until_complete()
+        logger.info("sarvam_job_completed", state=status.job_state)
+        
+        # Get metrics
+        metrics = job.get_page_metrics()
+        logger.info("sarvam_page_metrics", metrics=metrics)
+        
+        # Download output
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_zip = Path(tmpdir) / "output.zip"
+            job.download_output(str(output_zip))
+            
+            # Extract HTML/Markdown from ZIP
+            with zipfile.ZipFile(output_zip, 'r') as zip_ref:
+                zip_ref.extractall(tmpdir)
+                
+                # Find HTML file
+                html_files = list(Path(tmpdir).glob("*.html"))
+                if html_files:
+                    html_content = html_files[0].read_text()
+                    # Convert HTML to Markdown (simple conversion)
+                    import re
+                    markdown = re.sub(r'<[^>]+>', '', html_content)
+                    logger.info("sarvam_ocr_complete", markdown_len=len(markdown))
+                    return markdown
+        
+        # Fallback: return empty
+        logger.warning("sarvam_no_output_found")
+        return ""
+    
+    async def _ocr_with_sarvam_http(self, file_path: str, invoice_id: str) -> str:
+        """
+        Use Sarvam HTTP API directly (fallback if SDK not available).
+        """
+        import httpx
+        import base64
+        
+        logger.info("sarvam_http_ocr_started", invoice_id=invoice_id)
+        
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            # Upload file
+            with open(file_path, "rb") as f:
+                response = await client.post(
+                    "https://api.sarvam.ai/document-intelligence/analyze",
+                    headers={
+                        "api-subscription-key": self.sarvam_api_key,
+                    },
+                    files={
+                        "file": (Path(file_path).name, f, "application/pdf")
+                    },
+                    data={
+                        "language": "en-IN",
+                        "output_format": "html",
+                    },
+                )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            # Job-based API - poll for completion
+            job_id = result.get("job_id")
+            if not job_id:
+                raise ValueError("No job_id in response")
+            
+            # Poll for completion
+            for attempt in range(60):  # Max 5 minutes
+                await asyncio.sleep(5)
+                
+                status_response = await client.get(
+                    f"https://api.sarvam.ai/document-intelligence/job/{job_id}",
+                    headers={
+                        "api-subscription-key": self.sarvam_api_key,
+                    },
+                )
+                
+                status = status_response.json()
+                job_state = status.get("job_state")
+                
+                if job_state == "completed":
+                    # Download output
+                    output_response = await client.get(
+                        f"https://api.sarvam.ai/document-intelligence/job/{job_id}/output",
                         headers={
                             "api-subscription-key": self.sarvam_api_key,
-                            "Content-Type": "multipart/form-data",
                         },
-                        files={
-                            "file": (os.path.basename(file_path), f, "application/pdf")
-                        },
-                        data={"output_format": "markdown"},
                     )
+                    output_response.raise_for_status()
+                    output = output_response.json()
+                    
+                    # Extract HTML/Markdown
+                    html_content = output.get("html", "")
+                    import re
+                    markdown = re.sub(r'<[^>]+>', '', html_content)
+                    logger.info("sarvam_http_ocr_complete", markdown_len=len(markdown))
+                    return markdown
                 
-                response.raise_for_status()
-                data = response.json()
-                
-                markdown = data.get("markdown", "")
-                if not markdown:
-                    raise ValueError("Sarvam API returned empty markdown")
-                
-                logger.info(
-                    "sarvam_ocr_success",
-                    invoice_id=invoice_id,
-                    markdown_len=len(markdown),
-                )
-                
-                return markdown
-                
-            except httpx.HTTPStatusError as e:
-                logger.error(
-                    "sarvam_api_error",
-                    invoice_id=invoice_id,
-                    status=e.response.status_code,
-                    error=str(e),
-                )
-                # Fallback to local OCR
-                return await self._local_ocr_lighton(file_path)
+                elif job_state in ["failed", "cancelled"]:
+                    raise Exception(f"Job failed: {job_state}")
             
-            except Exception as e:
-                logger.error(
-                    "sarvam_unexpected_error",
-                    invoice_id=invoice_id,
-                    error=str(e),
-                )
-                raise
+            raise TimeoutError("Job did not complete within 5 minutes")
     
     async def _prod_llm_json_groq(self, markdown: str, invoice_id: str) -> Dict[str, Any]:
         """
