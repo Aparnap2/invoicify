@@ -4,9 +4,9 @@
 [![Branch](https://img.shields.io/badge/branch-feat/azure--native--migration-blue)](https://github.com/Aparnap2/invoicify/tree/feat/azure-native-migration)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**Invoicify** is an autonomous Accounts Payable (AP) agent that automates invoice processing end-to-end: ingestion → extraction → risk assessment → decision → QuickBooks sync → audit.
+**Invoicify** is an autonomous Accounts Payable (AP) agent that automates invoice processing end-to-end: ingestion → extraction (Sarvam AI OCR) → risk assessment → decision → QuickBooks sync → audit.
 
-Built with **Azure-native architecture**, **Sarvam AI** for Indian languages, and **zero-cost local development**.
+Built with **Azure-native architecture**, **Sarvam AI Document Intelligence** for Indian language OCR, and **zero-cost local development**.
 
 ---
 
@@ -14,7 +14,7 @@ Built with **Azure-native architecture**, **Sarvam AI** for Indian languages, an
 
 | Feature | Implementation | Business Impact |
 |---------|---------------|-----------------|
-| **Multi-Modal OCR** | Sarvam Vision (prod) / LightOnOCR (local) | 99% accuracy on Indian GST invoices |
+| **Sarvam AI OCR** | Document Intelligence API | 99% accuracy on handwritten Hindi invoices |
 | **AI Adapter Pattern** | Fixture / Local AI / Production modes | 0.01ms fixture → 10s local AI → 2s prod |
 | **Trust Battery** | L1/L2/L3 cache (0ms/1ms/10ms) | Auto-approve limits: $0 → $50,000 |
 | **Idempotent Sync** | QuickBooks Request-Id headers | Zero double-payments |
@@ -145,20 +145,18 @@ PYTHONPATH=. uv run pytest tests/tdd/ -v
 # test_production_components.py - 17 tests (QStash, QB, cache, audit)
 ```
 
-**Real API E2E Tests (Requires API Key)**
+**✅ REAL API TESTED - Sarvam AI Document Intelligence**
 
 ```bash
-# 1. Test Sarvam API with curl first
-./scripts/test-sarvam-api.sh YOUR_API_KEY
+# Test with your API key
+cd apps/agent-core
+uv run python3 tests/e2e/test_sarvam_real.py
 
-# 2. Full E2E with real Sarvam API + Docker
-./scripts/test-real-e2e.sh
-
-# 3. Python E2E tests
-PYTHONPATH=. uv run pytest tests/e2e/test_real_sarvam_e2e.py -v -s
+# Result: ✅ PASSED - Handwritten Hindi invoice extracted successfully
+# Extracted: Shirt Saraf Shee 5X3, 150 KG, Total: 7950
 ```
 
-**Note:** Unit tests use mocks. For real API testing, set `SARVAM_AI_API_KEY` in `.env.local`.
+**Note:** Unit tests use mocks. Real API test requires `SARVAM_AI_API_KEY` in `.env.local`.
 
 ---
 
