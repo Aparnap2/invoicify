@@ -119,3 +119,4 @@ yarn-error.log*
 
 # ── uv (Python Package Manager) ─────────────────────────────────────────────
 .uv/
+.env.docker
