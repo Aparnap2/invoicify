@@ -1,0 +1,170 @@
+# .github/workflows/azure-deploy.yml
+# Deploys the Invoicify monorepo to Azure free tier.
+#
+# Services deployed:
+#   invoicify-worker   → Azure Container Apps (Node 20, replaces Cloudflare Worker)
+#   invoicify-api      → Azure Container Apps (Python 3.11 agent-core)
+#   apps/web           → Azure Static Web Apps (Next.js)
+#
+# Triggers: push to feat/azure-native-migration or main
+# Required GitHub Secrets:
+#   AZURE_CLIENT_ID            (federated identity, no password needed)
+#   AZURE_TENANT_ID
+#   AZURE_SUBSCRIPTION_ID
+#   AZURE_STATIC_WEB_APPS_TOKEN
+#   REGISTRY_NAME              (e.g. invoicifyregistry)
+#   RESOURCE_GROUP             (e.g. invoicify-rg)
+
+name: Deploy to Azure
+
+on:
+  push:
+    branches:
+      - main
+      - feat/azure-native-migration
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - main
+
+permissions:
+  id-token: write   # OIDC federated auth — no password secrets needed
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 1: Build and deploy Hono worker (replaces Cloudflare Worker)
+  # ─────────────────────────────────────────────────────────────────────────
+  deploy-worker:
+    name: Deploy invoicify-worker → Container Apps
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build worker image
+        working-directory: invoicify-worker
+        run: |
+          az acr login --name ${{ secrets.REGISTRY_NAME }}
+          docker build \
+            -t ${{ secrets.REGISTRY_NAME }}.azurecr.io/invoicify-worker:${{ github.sha }} \
+            -t ${{ secrets.REGISTRY_NAME }}.azurecr.io/invoicify-worker:latest \
+            .
+          docker push ${{ secrets.REGISTRY_NAME }}.azurecr.io/invoicify-worker:${{ github.sha }}
+          docker push ${{ secrets.REGISTRY_NAME }}.azurecr.io/invoicify-worker:latest
+
+      - name: Deploy worker to Container Apps
+        run: |
+          az containerapp update \
+            --name invoicify-worker \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/invoicify-worker:${{ github.sha }} \
+            --set-env-vars \
+              ENVIRONMENT=production \
+              PORT=8787 \
+              DATABASE_URL=secretref:database-url \
+              AZURE_STORAGE_CONNECTION_STRING=secretref:storage-connection-string \
+              OPENAI_API_KEY=secretref:openai-api-key \
+              GROQ_API_KEY=secretref:groq-api-key \
+              AGENT_CORE_URL=secretref:agent-core-url
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 2: Build and deploy Python agent-core
+  # ─────────────────────────────────────────────────────────────────────────
+  deploy-agent-core:
+    name: Deploy agent-core → Container Apps
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build agent-core image
+        working-directory: apps/agent-core
+        run: |
+          az acr login --name ${{ secrets.REGISTRY_NAME }}
+          docker build \
+            -t ${{ secrets.REGISTRY_NAME }}.azurecr.io/agent-core:${{ github.sha }} \
+            -t ${{ secrets.REGISTRY_NAME }}.azurecr.io/agent-core:latest \
+            .
+          docker push ${{ secrets.REGISTRY_NAME }}.azurecr.io/agent-core:${{ github.sha }}
+          docker push ${{ secrets.REGISTRY_NAME }}.azurecr.io/agent-core:latest
+
+      - name: Deploy agent-core to Container Apps
+        run: |
+          az containerapp update \
+            --name invoicify-api \
+            --resource-group ${{ secrets.RESOURCE_GROUP }} \
+            --image ${{ secrets.REGISTRY_NAME }}.azurecr.io/agent-core:${{ github.sha }} \
+            --set-env-vars \
+              ENVIRONMENT=production \
+              EXTRACTOR_MODE=azure_di \
+              DATABASE_URL=secretref:database-url \
+              CHECKPOINTER_URL=secretref:database-url \
+              AZURE_STORAGE_CONNECTION_STRING=secretref:storage-connection-string \
+              AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT=secretref:adi-endpoint \
+              AZURE_DOCUMENT_INTELLIGENCE_KEY=secretref:adi-key \
+              AZURE_SEARCH_ENDPOINT=secretref:search-endpoint \
+              AZURE_SEARCH_KEY=secretref:search-key \
+              OPENAI_API_KEY=secretref:openai-api-key \
+              GROQ_API_KEY=secretref:groq-api-key \
+              LANGFUSE_PUBLIC_KEY=secretref:langfuse-public-key \
+              LANGFUSE_SECRET_KEY=secretref:langfuse-secret-key
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 3: Deploy Next.js frontend to Static Web Apps
+  # ─────────────────────────────────────────────────────────────────────────
+  deploy-web:
+    name: Deploy apps/web → Static Web Apps
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.action != 'closed')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Deploy to Azure Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: /apps/web
+          api_location: ''
+          output_location: .next
+        env:
+          NEXT_PUBLIC_API_URL: ${{ vars.API_URL }}
+          NEXT_PUBLIC_WORKER_URL: ${{ vars.WORKER_URL }}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 4: Close preview environment on PR close
+  # ─────────────────────────────────────────────────────────────────────────
+  close-preview:
+    name: Close Static Web Apps preview
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_TOKEN }}
+          action: close
