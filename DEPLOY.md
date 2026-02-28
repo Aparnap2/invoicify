@@ -8,40 +8,37 @@
 ║                   $0/month (12 months free)                   ║
 ╚══════════════════════════════════════════════════════════════╝
 
-User → Azure Static Web Apps (web/ → Next.js)
+User → Azure Static Web Apps (apps/web/ → Next.js)
          FREE always · 100GB BW · .5GB storage
 
        → Azure Container Apps: invoicify-api (FastAPI)
            FREE always · 180k vCPU-sec/month
            ├── Azure DB for PostgreSQL Flexible B1MS
            │     FREE 12 months · 750hrs · 32GB
-           │     ← Alembic migrations run on startup
+           │     ← SQLAlchemy + asyncpg
            ├── Azure Blob Storage
            │     FREE 12 months · 5GB hot
            │     ← PDF storage
-           │     ← Celery result backend
+           │     ← Queue result backend
            ├── Azure Key Vault
            │     FREE 12 months · 10k transactions
            ├── Azure Document Intelligence
            │     FREE 12 months · 500 pages/month
-           │     ← OCR extraction
+           │     ← OCR extraction (replaces Sarvam/Docling)
            ├── Azure AI Search
            │     FREE always · 3 indexes · 50MB
            │     ← Vendor policy RAG
            ├── Azure Event Grid
            │     FREE always · 100k ops/month
            │     ← PDF upload → triggers worker
-           └── Microsoft Graph API
-                 FREE · Email ingestion
+           └── Azure Storage Queue
+                 FREE always
+                 ← Async invoice processing
 
-       → Azure Container Apps: invoicify-worker (Celery)
+       → Azure Container Apps: invoicify-worker (Node.js)
            FREE always · same vCPU pool
-           Queues: invoice_processing, validation,
-                   export, email_processing, dlq_processing
-           Beat: cleanup (1h), health-check (5m), reports (12h)
-           └── Azure Service Bus (Standard)
-                 FREE 12 months · 750hrs · 13M ops
-                 ← Celery broker (replaces Redis)
+           └── Consumes from Azure Storage Queue
+               ← Processes invoices asynchronously
 ```
 
 ---

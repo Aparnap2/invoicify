@@ -1,4 +1,4 @@
-# INVOICIFY — Production-Ready AP Automation
+# INVOICIFY — Azure-Native AP Automation
 
 [![Tests](https://img.shields.io/badge/tests-51%20passing-brightgreen)](https://github.com/Aparnap2/invoicify)
 [![Branch](https://img.shields.io/badge/branch-feat/azure--native--migration-blue)](https://github.com/Aparnap2/invoicify/tree/feat/azure-native-migration)
@@ -8,10 +8,58 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                    INVOICIFY — AUTONOMOUS AP AGENT                           ║
 ║                                                                              ║
-║  PDF Invoice → Sarvam AI OCR → Azure LLM → Trust Battery → QuickBooks       ║
+║  PDF Invoice → Azure Doc Intelligence → OpenRouter LLM → Trust Battery      ║
+║                        → QuickBooks Sync → Audit                             ║
 ║                                                                              ║
-║  99% OCR Accuracy | 51 Tests Passing | $0/month (Free Tier)                  ║
+║  99% OCR Accuracy | 51 Tests Passing | $0/month (12 months free)            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
+```
+
+---
+
+## 🏗️ ARCHITECTURE OVERVIEW
+
+```mermaid
+flowchart TB
+    subgraph "Frontend"
+        A[Next.js App<br/>apps/web/]
+    end
+    
+    subgraph "Backend - Azure Container Apps"
+        B[FastAPI Agent Core<br/>apps/agent-core/]
+        C[Node.js Worker<br/>invoicify-worker/]
+    end
+    
+    subgraph "Azure Services (Free Tier)"
+        D[Azure DB for PostgreSQL<br/>B1MS - 12mo free]
+        E[Azure Blob Storage<br/>5GB - 12mo free]
+        F[Azure Document Intelligence<br/>500 pages/mo - 12mo free]
+        G[Azure AI Search<br/>Free always]
+        H[Azure Storage Queue<br/>Free always]
+        I[Azure Event Grid<br/>100k ops/mo - free]
+        J[Azure Key Vault<br/>10k tx/mo - 12mo free]
+    end
+    
+    A -->|HTTP| B
+    A -->|HTTP| C
+    B --> D
+    B --> E
+    B --> F
+    B --> G
+    B --> H
+    C --> H
+    I --> H
+    
+    style A fill:#61DAFB
+    style B fill:#4CAF50,color:#fff
+    style C fill:#2196F3,color:#fff
+    style D fill:#FF9800
+    style E fill:#FF9800
+    style F fill:#FF9800
+    style G fill:#FF9800
+    style H fill:#FF9800
+    style I fill:#FF9800
+    style J fill:#FF9800
 ```
 
 ---
@@ -19,457 +67,367 @@
 ## 📖 TABLE OF CONTENTS
 
 ```
-├── 1. HIGH-LEVEL DESIGN (HLD)
-│   ├── 1.1 System Architecture
-│   ├── 1.2 Component Diagram
-│   └── 1.3 Data Flow
-├── 2. LOW-LEVEL DESIGN (LLD)
-│   ├── 2.1 State Machine
-│   ├── 2.2 Database Schema
-│   └── 2.3 API Endpoints
-├── 3. QUICK START
-├── 4. TEST RESULTS
-└── 5. SECURITY
+├── 1. QUICK START
+│   ├── 1.1 Prerequisites
+│   ├── 1.2 Local Development
+│   └── 1.3 Azure Deployment
+├── 2. ARCHITECTURE
+│   ├── 2.1 Monorepo Structure
+│   ├── 2.2 Azure Services
+│   └── 2.3 Data Flow
+├── 3. TESTING
+│   ├── 3.1 Unit Tests
+│   ├── 3.2 E2E Tests
+│   └── 3.3 Local Testing
+├── 4. DEPLOYMENT
+│   ├── 4.1 Bootstrap Script
+│   ├── 4.2 Manual Deployment
+│   └── 4.3 CI/CD Pipeline
+├── 5. SECURITY
+└── 6. COST BREAKDOWN
 ```
 
 ---
 
-## 1. HIGH-LEVEL DESIGN (HLD)
+## 1. QUICK START
 
-### 1.1 System Architecture
+### 1.1 Prerequisites
 
-```mermaid
-flowchart TB
-    subgraph "📤 INGESTION LAYER"
-        A[PDF Upload] --> B[Rate Limiter]
-        B --> C[SHA-256 Dedup]
-        C --> D[Priority Router]
-    end
-    
-    subgraph "🧠 AI EXTRACTION LAYER"
-        D --> E[Sarvam AI OCR]
-        E --> F[Azure LLM / Ollama]
-        F --> G[Pydantic Validation]
-    end
-    
-    subgraph "🔋 DECISION LAYER"
-        G --> H[Trust Battery]
-        H --> I[Risk Analysis]
-        I --> J{Decision}
-    end
-    
-    subgraph "💾 EXECUTION LAYER"
-        J -->|AUTO_APPROVE| K[QuickBooks Sync]
-        J -->|HITL| L[Human Review]
-        J -->|BLOCKED| M[Fraud Alert]
-    end
-    
-    subgraph "🗄️ DATA LAYER"
-        K --> N[(Cosmos DB)]
-        L --> N
-        M --> N
-        N --> O[(Redis Cache)]
-        N --> P[(Qdrant RAG)]
-    end
-    
-    subgraph "🔒 SECURITY"
-        Q[Pre-commit Hooks]
-        R[Secret Scanning]
-        S[.gitignore]
-    end
-    
-    style A fill:#4CAF50,color:#fff
-    style E fill:#2196F3,color:#fff
-    style H fill:#FF9800,color:#000
-    style K fill:#9C27B0,color:#fff
-    style N fill:#607D8B,color:#fff
-    style Q fill:#F44336,color:#fff
+```bash
+# Install Azure CLI
+curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+
+# Install Docker
+sudo apt-get install docker.io
+
+# Install Node.js (for worker)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# Install pnpm
+npm install -g pnpm
+
+# Install uv (Python)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### 1.2 Component Diagram
+### 1.2 Local Development
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           INVOICIFY ARCHITECTURE                             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐                │
-│  │   FRONTEND   │────▶│  API GATEWAY │────▶│  AGENT CORE  │                │
-│  │   (Next.js)  │     │   (Hono)     │     │  (FastAPI)   │                │
-│  └──────────────┘     └──────────────┘     └──────────────┘                │
-│                                                │                             │
-│                    ┌───────────────────────────┼───────────────────────────┐│
-│                    │                           │                           ││
-│                    ▼                           ▼                           ▼│
-│           ┌──────────────┐           ┌──────────────┐           ┌──────────────┐│
-│           │  SARVAM AI   │           │ AZURE LLM    │           │ TRUST BATTERY││
-│           │     OCR      │           │  (GPT-4o)    │           │   (Redis)    ││
-│           └──────────────┘           └──────────────┘           └──────────────┘│
-│                                                                              │
-│                    ┌───────────────────────────┴───────────────────────────┐│
-│                    │                           │                           ││
-│                    ▼                           ▼                           ▼│
-│           ┌──────────────┐           ┌──────────────┐           ┌──────────────┐│
-│           │  QUICKBOOKS  │           │  COSMOS DB   │           │   QDRANT     ││
-│           │     SYNC     │           │  (NoSQL)     │           │    (RAG)     ││
-│           └──────────────┘           └──────────────┘           └──────────────┘│
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+```bash
+# Clone and navigate
+git checkout feat/azure-native-migration
+
+# Terminal 1: Agent Core (FastAPI)
+cd apps/agent-core
+cp .env.example .env
+echo "EXTRACTOR_MODE=fixture" >> .env
+uv sync
+uv run uvicorn src.main:app --port 8001 --reload
+
+# Terminal 2: Worker (Node.js mode)
+cd invoicify-worker
+pnpm install
+pnpm dev:node
+
+# Terminal 3: Frontend
+cd apps/web
+pnpm install
+pnpm dev
+
+# Test health endpoints
+curl http://localhost:8001/health
+curl http://localhost:8787/health
 ```
 
-### 1.3 Data Flow
+### 1.3 Azure Deployment (5 minutes)
+
+```bash
+# 1. Create .env.azure with your credentials
+cp .env.azure.example .env.azure
+# Edit with your Azure subscription ID and tenant ID
+
+# 2. Run bootstrap script
+chmod +x scripts/bootstrap.sh
+./scripts/bootstrap.sh
+
+# 3. Add GitHub Secrets (displayed by script)
+# 4. Push to main branch - auto-deploys
+git push origin feat/azure-native-migration
+```
+
+---
+
+## 2. ARCHITECTURE
+
+### 2.1 Monorepo Structure
+
+```
+invoicify/
+├── apps/
+│   ├── agent-core/          # FastAPI backend (Python)
+│   │   ├── src/
+│   │   │   ├── extraction/  # Azure Document Intelligence OCR
+│   │   │   ├── queue/       # Azure Storage Queue consumer
+│   │   │   ├── cache/       # L1/L2/L3 cache
+│   │   │   ├── trust/       # Trust battery
+│   │   │   └── main.py      # FastAPI entry point
+│   │   ├── tests/tdd/       # 51 passing tests
+│   │   └── Dockerfile
+│   ├── api/                 # Separate API layer
+│   ├── edge-api/            # Edge routing
+│   ├── voice-agent/         # Sarvam voice integration
+│   └── web/                 # Next.js frontend
+├── invoicify-worker/        # Node.js worker (Azure Container Apps)
+│   ├── src/
+│   │   ├── app.ts           # Hono app (shared)
+│   │   ├── server.ts        # Node.js server for Azure
+│   │   └── lib/
+│   │       ├── db-adapter.ts    # Postgres adapter
+│   │       └── r2-adapter.ts    # Azure Blob adapter
+│   ├── Dockerfile
+│   └── package.json
+├── infra/
+│   └── main.bicep           # Azure infrastructure (810 lines)
+├── scripts/
+│   ├── bootstrap.sh         # One-command Azure setup
+│   ├── seed-keyvault.sh     # Key Vault secret seeding
+│   └── start_*.sh           # Local Docker startup
+└── .github/workflows/
+    └── azure-deploy.yml     # CI/CD pipeline
+```
+
+### 2.2 Azure Services (All Free Tier)
+
+| Service | Purpose | Free Tier | After Free |
+|---------|---------|-----------|------------|
+| **Container Apps** | API + Worker | 180k vCPU-sec/mo | Always free |
+| **PostgreSQL B1MS** | Database | 750 hrs/mo (12mo) | ~$12/mo |
+| **Blob Storage** | PDF storage | 5GB (12mo) | ~$0.10/mo |
+| **Document Intelligence** | OCR extraction | 500 pages/mo (12mo) | Pay-per-page |
+| **AI Search** | Vendor RAG | 3 indexes, 50MB | Always free |
+| **Storage Queue** | Async processing | Free | Always free |
+| **Event Grid** | Event routing | 100k ops/mo | Always free |
+| **Key Vault** | Secrets | 10k tx/mo (12mo) | ~$0 |
+| **Static Web Apps** | Frontend | 100GB BW | Always free |
+
+**Total Month 1-12:** $0/month  
+**Total Month 13+:** ~$42/month
+
+### 2.3 Data Flow
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant A as API Gateway
-    participant E as Extractor
-    participant O as OCR (Sarvam)
-    participant L as LLM (Azure)
-    participant T as Trust Battery
-    participant Q as QuickBooks
-    participant D as Database
+    participant W as Static Web Apps
+    participant A as Container Apps API
+    participant Q as Storage Queue
+    participant D as Document Intelligence
+    participant P as PostgreSQL
+    participant S as AI Search
     
-    U->>A: Upload PDF Invoice
-    A->>E: Route to Extractor
-    E->>O: Send for OCR
-    O-->>E: Extracted Markdown
-    E->>L: Parse with LLM
-    L-->>E: Structured JSON
-    E->>T: Check Trust Level
-    T-->>E: Trust Score + Limit
-    E->>E: Risk Analysis
-    
-    alt AUTO_APPROVE
-        E->>Q: Sync to QuickBooks
-        Q-->>E: Bill ID
-        E->>D: Store Result
-        E-->>U: ✅ Approved
-    else HITL_REVIEW
-        E->>D: Flag for Review
-        E-->>U: ⏳ Pending Review
-    else BLOCKED
-        E->>D: Log Fraud Alert
-        E-->>U: ❌ Blocked
-    end
+    U->>W: Upload PDF Invoice
+    W->>A: POST /api/v1/invoices
+    A->>D: Extract with OCR
+    D-->>A: Structured JSON
+    A->>S: Lookup vendor policy
+    S-->>A: Trust level + rules
+    A->>P: Store invoice
+    A->>Q: Queue for async processing
+    A-->>W: Response
+    W-->>U: ✅ Uploaded
 ```
 
 ---
 
-## 2. LOW-LEVEL DESIGN (LLD)
+## 3. TESTING
 
-### 2.1 State Machine
-
-```mermaid
-stateDiagram-v2
-    [*] --> SUBMITTED: PDF Upload
-    
-    SUBMITTED --> EXTRACTING: Event Trigger
-    EXTRACTING --> VALIDATING: OCR Complete
-    
-    state VALIDATING {
-        [*] --> MathCheck
-        MathCheck --> DuplicateCheck: Math Valid
-        MathCheck --> NEEDS_CALL: Math Error
-        DuplicateCheck --> RAGLookup: No Duplicate
-        DuplicateCheck --> BLOCKED: Duplicate Found
-        RAGLookup --> ANALYZING: Context Retrieved
-    }
-    
-    VALIDATING --> ANALYZING: Validation Passed
-    VALIDATING --> NEEDS_CALL: Low Confidence
-    
-    state ANALYZING {
-        [*] --> LoadTrustBattery
-        LoadTrustBattery --> ComputeRiskScore
-        ComputeRiskScore --> ApplyDecisionMatrix
-    }
-    
-    ANALYZING --> AUTO_APPROVE: Trust ≥ CORE + Risk < 0.3
-    ANALYZING --> HITL_REQUIRED: Trust = STANDARD OR Risk 0.3-0.7
-    ANALYZING --> BLOCKED: Risk > 0.7 OR Fraud
-    
-    AUTO_APPROVE --> EXECUTING: QuickBooks API
-    HITL_REQUIRED --> AWAITING_HUMAN: SignalR Notification
-    BLOCKED --> FRAUD_ALERT: Admin Alert
-    
-    EXECUTING --> AUDITING: Bill Created
-    AWAITING_HUMAN --> AUDITING: Human Decision
-    FRAUD_ALERT --> AUDITING: Logged
-    
-    AUDITING --> [*]: Cosmos DB + Event Grid
-    
-    note right of SUBMITTED
-        PDF stored in
-        Azure Blob Storage
-    end note
-    
-    note right of ANALYZING
-        Trust Battery loaded
-        from Cosmos DB
-    end note
-    
-    note right of EXECUTING
-        Idempotent Sync
-        Request-Id headers
-    end note
-```
-
-### 2.2 Database Schema
-
-```mermaid
-erDiagram
-    INVOICES ||--o{ AUDIT_EVENTS : has
-    INVOICES ||--|| VENDORS : belongs_to
-    VENDORS ||--o{ TRUST_BATTERY : has
-    INVOICES ||--o{ QUICKBOOKS_BILLS : synced_to
-    
-    INVOICES {
-        string id PK
-        string tenant_id
-        string vendor_id FK
-        string invoice_number
-        float total_amount
-        string status
-        datetime created_at
-    }
-    
-    VENDORS {
-        string id PK
-        string tenant_id
-        string name
-        string tax_id
-        string trust_level
-    }
-    
-    TRUST_BATTERY {
-        string vendor_id PK
-        int invoice_count
-        int accurate_count
-        float trust_score
-        float auto_approve_limit
-    }
-    
-    AUDIT_EVENTS {
-        string id PK
-        string invoice_id FK
-        string event_type
-        json previous_state
-        json new_state
-        datetime created_at
-    }
-    
-    QUICKBOOKS_BILLS {
-        string id PK
-        string invoice_id FK
-        string qb_bill_id
-        datetime synced_at
-    }
-```
-
-### 2.3 API Endpoints
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              API ENDPOINTS                                   │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  INGESTION                                                                   │
-│  ├── POST   /api/v1/invoices           # Upload invoice PDF                 │
-│  ├── GET    /api/v1/invoices/:id       # Get invoice status                 │
-│  └── GET    /api/v1/invoices           # List invoices (paginated)          │
-│                                                                              │
-│  PROCESSING                                                                  │
-│  ├── POST   /api/internal/process-batch    # Process batch (QStash)         │
-│  ├── POST   /api/internal/process-single   # Process single invoice         │
-│  └── POST   /api/internal/reconcile        # Nightly reconciliation         │
-│                                                                              │
-│  ADMIN                                                                       │
-│  ├── GET    /api/admin/vendors             # List vendors                  │
-│  ├── GET    /api/admin/vendors/:id         # Vendor details + trust        │
-│  └── POST   /api/admin/vendors/:id/reset   # Reset trust battery           │
-│                                                                              │
-│  HEALTH                                                                      │
-│  ├── GET    /health                      # Health check                     │
-│  └── GET    /metrics                     # Prometheus metrics               │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 3. QUICK START
-
-### 3.1 Start Docker Containers
+### 3.1 Unit Tests (51 Passing)
 
 ```bash
-# Start all services
-./scripts/start_all.sh
-
-# Or start individually
-./scripts/start_ollama.sh    # LLM (6 models)
-./scripts/start_redis.sh     # Cache
-./scripts/start_qdrant.sh    # RAG
-```
-
-### 3.2 Configure Environment
-
-```bash
-# Copy example config
-cp apps/agent-core/.env.example apps/agent-core/.env.local
-
-# Add your API keys
-echo "SARVAM_AI_API_KEY=sk_..." >> apps/agent-core/.env.local
-echo "AZURE_OPENAI_KEY=..." >> apps/agent-core/.env.local
-echo "AZURE_OPENAI_ENDPOINT=..." >> apps/agent-core/.env.local
-```
-
-### 3.3 Run Tests
-
-```bash
-# Unit tests (51 passing)
 cd apps/agent-core
 PYTHONPATH=. uv run pytest tests/tdd/ -v
 
-# E2E tests with real services
-PYTHONPATH=. uv run python tests/e2e/test_full_e2e_real.py
+# Results:
+# test_sarvam_extractor.py       - 13 tests
+# test_intake_router.py          - 21 tests
+# test_production_components.py  - 17 tests
 ```
 
-### 3.4 Start Server
+### 3.2 E2E Tests (Real Services)
 
 ```bash
 cd apps/agent-core
-uv run uvicorn src.main:app --reload --port 8000
+PYTHONPATH=. uv run python tests/e2e/test_full_e2e_real.py
+
+# Tests:
+# ✅ Redis connection
+# ✅ Qdrant connection
+# ✅ Ollama connection
+# ✅ Sarvam OCR (with API key)
+# ✅ Azure LLM (with credentials)
+# ✅ Trust Battery
 ```
 
-### 3.5 Deploy to Azure ☁️
+### 3.3 Local Testing
 
 ```bash
-# Quick deploy (5 minutes)
-chmod +x scripts/deploy-to-azure.sh
-./scripts/deploy-to-azure.sh
+# Test Agent Core
+cd apps/agent-core
+uv run uvicorn src.main:app --port 8001
+curl http://localhost:8001/health
 
-# Or follow the complete guide
-# See: DEPLOYMENT_GUIDE.md
+# Test Worker
+cd invoicify-worker
+pnpm dev:node
+curl http://localhost:8787/health
 ```
 
 ---
 
-## 4. TEST RESULTS
+## 4. DEPLOYMENT
 
-### 4.1 Unit Tests
+### 4.1 Bootstrap Script (Recommended)
 
-```
-============================== 51 passed ==============================
-test_sarvam_extractor.py       - 13 tests (OCR, PII, validation)
-test_intake_router.py          - 21 tests (dedup, rate limit, priority)
-test_production_components.py  - 17 tests (QStash, QB, cache, audit)
-============================== 51 passed in 4.29s ==============================
+```bash
+./scripts/bootstrap.sh
 ```
 
-### 4.2 E2E Tests (Real Services)
+**Creates:**
+- Resource Group
+- Container Registry
+- PostgreSQL Server
+- Storage Queue
+- Blob Storage
+- Key Vault
+- Document Intelligence
+- AI Search
+- Container Apps (API + Worker)
+- Static Web App
 
-```
-======================================================================
-🧪 COMPREHENSIVE E2E TEST - REAL SERVICES
-======================================================================
+### 4.2 Manual Deployment
 
-🔴 Testing Redis...
-   ✅ Redis: CONNECTED
+See **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** for complete instructions.
 
-🔵 Testing Qdrant...
-   ✅ Qdrant: CONNECTED (1 collections)
+### 4.3 CI/CD Pipeline
 
-🦙 Testing Ollama...
-   ✅ Ollama: CONNECTED (6 models)
+```yaml
+# .github/workflows/azure-deploy.yml
 
-📄 Testing Sarvam AI OCR...
-   ✅ Sarvam OCR: COMPLETED (Job: 20260227_a7409005...)
+on: push to feat/azure-native-migration
 
-🦙 Testing Ollama LLM...
-   ✅ Ollama LLM: CONNECTED (Model: qwen2.5-coder:3b)
-
-🔋 Testing Trust Battery...
-   ✅ Trust Battery: CORE (Limit: $5,000)
-
-======================================================================
-📈 OVERALL: 7/7 tests passed
-======================================================================
-
-🎉 ALL TESTS PASSED! System is production-ready!
-```
-
-### 4.3 Real OCR Test (Handwritten Hindi Invoice)
-
-```
-📄 Extracted Text (199 chars):
-============================================================
-<table>
-<thead>
-<tr><th>S No</th><th>KG</th><th>ITEM</th><th>TOTAL</th></tr>
-</thead>
-<tbody>
-<tr><td>1</td><td>150</td><td>Shirt Saraf Shee 5X3</td><td>7950</td></tr>
-</tbody>
-</table>
-============================================================
-✅ SARVAM AI HANDWRITTEN HINDI INVOICE TEST PASSED!
+Jobs:
+  1. test - Run pytest
+  2. deploy-infra - Deploy Bicep (on infra/ changes)
+  3. deploy-agent-core - Build + push FastAPI image
+  4. deploy-worker - Build + push Node.js worker image
+  5. deploy-web - Deploy Static Web App (on apps/web/ changes)
 ```
 
 ---
 
 ## 5. SECURITY
 
-### 5.1 Secret Prevention
+### Secret Management
 
 ```bash
-# Pre-commit hook installed automatically
-# Blocks commits with secrets
-
-🔒 Running secret detection...
-No secrets detected
-✅ COMMIT ALLOWED
+# ✅ GitHub Secrets - CI/CD credentials
+# ✅ Azure Key Vault - Runtime secrets
+# ✅ .gitignore - Prevents accidental commits
+# ✅ Pre-commit hook - Scans for secrets
 ```
 
-### 5.2 .gitignore Coverage
+### Pre-commit Hook
 
+```bash
+# Automatically installed
+cp .githooks/pre-commit .git/hooks/pre-commit
+
+# Scans for:
+# - API keys (OpenRouter, Azure, etc.)
+# - Passwords
+# - Connection strings
 ```
-✅ .env* files (except .env.example)
-✅ *.key, *.pem, *.crt, *.secret, *.password
-✅ secrets/ directory
-✅ .secrets.baseline
-✅ credentials.json, service-account.json
-✅ .azure/, .aws/, .gcp/
-✅ *.tfstate, *.tfplan
-```
 
-### 5.3 Security Best Practices
+### RBAC
 
-| Measure | Status | Details |
-|---------|--------|---------|
-| Pre-commit Hooks | ✅ Active | Blocks secrets |
-| .gitignore | ✅ Comprehensive | 120+ patterns |
-| Secret Scanning | ✅ Enabled | GitHub Advanced Security |
-| Environment Variables | ✅ .env.local | Never committed |
-| API Keys | ✅ Redacted | In code and docs |
+- Managed Identity for Container Apps
+- Key Vault access via RBAC
+- Storage access via Managed Identity
+- No credentials in code
 
 ---
 
-## 📊 FREE TIER BUDGET
+## 6. COST BREAKDOWN
 
-| Service | Free Limit | Our Usage | Headroom |
-|---------|-----------|-----------|----------|
-| Azure Functions | 1M req/mo | 6,000/mo | 99.4% |
-| Event Grid | 100k ops/mo | 1,500/mo | 98.5% |
-| QStash | 1,000 msg/day | 20 batches | 98% |
-| Upstash Redis | 500k cmd/mo | 15,000/mo | 97% |
-| Cosmos DB | 1,000 RU/s | ~10 RU/invoice | 99% |
-| Groq | 30 RPM | Auto-routed | N/A |
+| Month | Azure Cost | Notes |
+|-------|-----------|-------|
+| 1-12 | $0 | All services in free tier |
+| 13+ | ~$42/mo | PostgreSQL + Storage + Container Registry |
 
-**Total Monthly Cost: $0** (for demo scale up to 10k invoices/day)
+### Free Tier Limits
+
+```
+Container Apps:     180,000 vCPU-sec/month + 2M requests
+PostgreSQL B1MS:    750 hours/month (12 months)
+Blob Storage:       5GB hot block (12 months)
+Document Intelligence: 500 pages/month (12 months)
+AI Search:          3 indexes, 50MB (always free)
+Storage Queue:      Free (always)
+Event Grid:         100k operations/month (always free)
+Key Vault:          10k transactions/month (12 months)
+Static Web Apps:    100GB bandwidth (always free)
+```
 
 ---
 
-**Built with ❤️ by the Invoicify Team**  
-**Last Updated:** February 27, 2026  
-**Version:** 3.0 (Production-Ready + Security-Hardened)
+## 📄 ADDITIONAL DOCUMENTATION
+
+| Document | Purpose |
+|----------|---------|
+| [DEPLOY.md](DEPLOY.md) | Quick deployment guide |
+| [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) | Complete deployment instructions |
+| [prd.md](prd.md) | Product requirements |
+| [DOCKER_TESTING_GUIDE.md](DOCKER_TESTING_GUIDE.md) | Local Docker testing |
+
+---
+
+## 🆘 TROUBLESHOOTING
+
+### Container won't start
+
+```bash
+az containerapp logs show \
+  --name invoicify-api \
+  --resource-group invoicify-rg \
+  --follow
+```
+
+### Database connection fails
+
+```bash
+az keyvault secret show \
+  --vault-name invoicify-kv \
+  --name db-url
+```
+
+### Worker not processing
+
+```bash
+az containerapp logs show \
+  --name invoicify-worker \
+  --resource-group invoicify-rg
+```
+
+---
+
+## 📞 SUPPORT
+
+- **Issues:** https://github.com/Aparnap2/invoicify/issues
+- **Azure Portal:** https://portal.azure.com
+- **Documentation:** See DEPLOYMENT_GUIDE.md
+
+---
+
+**Built with ❤️ on Azure Free Tier**  
+**Last Updated:** March 1, 2026  
+**Version:** 3.0 (Azure-Native)
