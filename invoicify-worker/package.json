@@ -4,6 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --port 8787",
+    "dev:node": "tsx src/server.ts",
+    "build": "tsc --outDir dist --module commonjs --target es2020 --moduleResolution node --esModuleInterop true --skipLibCheck true --resolveJsonModule true",
+    "start": "node dist/server.js",
     "deploy": "wrangler deploy",
     "test": "vitest",
     "test:ui": "vitest --ui",
@@ -13,13 +16,19 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@azure/storage-blob": "^12.28.0",
+    "@azure/storage-queue": "^12.12.0",
+    "@hono/node-server": "^1.13.0",
     "drizzle-orm": "^0.38.0",
     "hono": "^4.6.0",
     "neo4j-driver": "^6.0.1",
+    "pg": "^8.13.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250109.0",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0",
     "wrangler": "^3.103.0"
