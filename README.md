@@ -342,6 +342,17 @@ cd apps/agent-core
 uv run uvicorn src.main:app --reload --port 8000
 ```
 
+### 3.5 Deploy to Azure ☁️
+
+```bash
+# Quick deploy (5 minutes)
+chmod +x scripts/deploy-to-azure.sh
+./scripts/deploy-to-azure.sh
+
+# Or follow the complete guide
+# See: DEPLOYMENT_GUIDE.md
+```
+
 ---
 
 ## 4. TEST RESULTS
