@@ -16,6 +16,7 @@ bundle/
 # ── Environment & Secrets ───────────────────────────────────────────────────
 .env*
 !.env.example
+!.env.azure.example
 .dev.vars
 .vars
 .env.local

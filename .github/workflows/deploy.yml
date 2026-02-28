@@ -1,0 +1,158 @@
+name: Deploy Invoicify to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  RESOURCE_GROUP: invoicify-rg
+  ACR_NAME: invoicifyregistry
+  LOCATION: eastus
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # JOB 1: Run Tests
+  # ─────────────────────────────────────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install uv
+        run: pip install uv
+      
+      - name: Sync dependencies
+        run: uv sync --frozen
+      
+      - name: Run tests
+        run: uv run pytest tests/ -v --tb=short -x
+        env:
+          ENVIRONMENT: test
+          DATABASE_URL: sqlite+aiosqlite:///./test.db
+          REDIS_URL: memory://
+          SECRET_KEY: test-secret-key-not-real
+
+  # ─────────────────────────────────────────────────────────────────────
+  # JOB 2: Deploy Infrastructure (only on infra changes)
+  # ─────────────────────────────────────────────────────────────────────
+  deploy-infra:
+    needs: test
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.modified, 'infra/')
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - uses: azure/arm-deploy@v2
+        with:
+          resourceGroupName: ${{ env.RESOURCE_GROUP }}
+          template: ./infra/main.bicep
+          parameters: >
+            environment=prod
+            location=${{ env.LOCATION }}
+            appName=invoicify
+            tenantId=${{ secrets.AZURE_TENANT_ID }}
+            subscriptionId=${{ secrets.AZURE_SUBSCRIPTION_ID }}
+            postgresPassword=${{ secrets.POSTGRES_PASSWORD }}
+            openRouterApiKey=${{ secrets.OPENROUTER_API_KEY }}
+            graphClientId=${{ secrets.GRAPH_CLIENT_ID }}
+            graphClientSecret=${{ secrets.GRAPH_CLIENT_SECRET }}
+            quickbooksClientId=${{ secrets.QUICKBOOKS_CLIENT_ID }}
+            quickbooksClientSecret=${{ secrets.QUICKBOOKS_CLIENT_SECRET }}
+            secretKey=${{ secrets.SECRET_KEY }}
+          failOnStdErr: false
+
+  # ─────────────────────────────────────────────────────────────────────
+  # JOB 3: Build + Push Image, Deploy All 3 Container Apps
+  # ─────────────────────────────────────────────────────────────────────
+  deploy-backend:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Build and push image
+        run: |
+          az acr login --name ${{ env.ACR_NAME }}
+          docker build \
+            -t ${{ env.ACR_NAME }}.azurecr.io/invoicify-api:${{ github.sha }} \
+            -t ${{ env.ACR_NAME }}.azurecr.io/invoicify-api:latest \
+            -f apps/agent-core/Dockerfile \
+            apps/agent-core/
+          docker push ${{ env.ACR_NAME }}.azurecr.io/invoicify-api:${{ github.sha }}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/invoicify-api:latest
+      
+      - name: Update API Container App
+        run: |
+          az containerapp update --name invoicify-api \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.ACR_NAME }}.azurecr.io/invoicify-api:${{ github.sha }}
+      
+      - name: Update Worker Container App
+        run: |
+          az containerapp update --name invoicify-worker \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.ACR_NAME }}.azurecr.io/invoicify-api:${{ github.sha }}
+      
+      - name: Update Beat Container App
+        run: |
+          az containerapp update --name invoicify-beat \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.ACR_NAME }}.azurecr.io/invoicify-api:${{ github.sha }}
+      
+      - name: Wait for deployment
+        run: sleep 30
+      
+      - name: Smoke test
+        run: |
+          FQDN=$(az containerapp show --name invoicify-api \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query 'properties.configuration.ingress.fqdn' -o tsv)
+          
+          echo "Testing health endpoint..."
+          curl --fail --retry 5 --retry-delay 5 https://$FQDN/health
+          
+          echo ""
+          echo "✅ Deployment successful!"
+          echo "🌐 Live API: https://$FQDN"
+          echo "📊 Monitor: Azure Portal → Container Apps → invoicify-api → Log stream"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # JOB 4: Deploy Frontend (only on web/ changes)
+  # ─────────────────────────────────────────────────────────────────────
+  deploy-frontend:
+    needs: test
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.modified, 'web/')
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: 'upload'
+          app_location: '/web'
+          output_location: '.next'
+        env:
+          NEXT_PUBLIC_API_URL: ${{ secrets.API_URL }}
