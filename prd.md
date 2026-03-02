@@ -156,7 +156,41 @@ Acceptance Criteria:
 ✅ GST/tax calculation validation
 ```
 
-### 5.3 Trust Battery
+### 5.3 LangGraph AP Workflow (NEW in v4.0)
+
+```
+Feature: State machine for AP processing
+Priority: P0 (MVP)
+
+Workflow Nodes:
+- INGEST: Validate job payload, check idempotency
+- EXTRACT: Azure Document Intelligence or fixture
+- ENRICH_CONTEXT: Fetch vendor profile, bank details, POs
+- FRAUD_GATE: Deterministic checks (NO LLM)
+- DUPLICATE_CHECK: Exact + fuzzy matching
+- THREE_WAY_MATCH: Invoice ↔ PO ↔ Receipt
+- GL_CODING: Memory-based GL assignment
+- DECISION: Deterministic (AUTO_APPROVE/HITL_REQUIRED/REJECT)
+- DRAFT_RESOLUTION: Create task packet (NOT auto-sent)
+- EXECUTE: Post to QuickBooks
+- AUDIT_LOG: Immutable log with hashes
+
+Tech Stack:
+- LangGraph StateGraph (state persistence)
+- Azure AI Search (semantic matching)
+- asyncpg (PostgreSQL)
+
+Acceptance Criteria:
+✅ Bank detail change → TASK_SECURITY_REVIEW
+✅ Vendor mismatch → TASK_SECURITY_REVIEW
+✅ Duplicate invoice → TASK_DUPLICATE_REVIEW
+✅ PO variance > tolerance → TASK_PO_OWNER_APPROVAL
+✅ New vendor → TASK_VENDOR_ONBOARDING
+✅ Reprocessing same invoice → No duplicate tasks (idempotent)
+✅ Every node → audit_logs entry
+```
+
+### 5.4 Trust Battery
 
 ```
 Feature: Adaptive auto-approval
@@ -175,7 +209,7 @@ Acceptance Criteria:
 ✅ Audit trail for all decisions
 ```
 
-### 5.4 QuickBooks Sync
+### 5.5 QuickBooks Sync
 
 ```
 Feature: Idempotent bill creation
@@ -193,7 +227,7 @@ Acceptance Criteria:
 ✅ Audit receipt (SHA-256 hash)
 ```
 
-### 5.5 Audit Ledger
+### 5.6 Audit Ledger
 
 ```
 Feature: Immutable audit trail

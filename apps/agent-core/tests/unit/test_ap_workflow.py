@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# Add src to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 # Set environment for testing
 os.environ["ENVIRONMENT"] = "test"
@@ -57,9 +59,13 @@ class TestFraudGate:
 
     def test_bank_detail_no_change(self):
         """Test that matching bank details pass."""
-        # Same hash for same details
-        from src.risk.fraud_gate import hash_bank_details
+        from src.risk.fraud_gate import (
+            FraudCheckInput,
+            hash_bank_details,
+            run_fraud_gate,
+        )
         
+        # Same hash for same details
         bank_hash = hash_bank_details(
             account_number="1234567890",
             ifsc_code="HDFC0001234",
@@ -81,6 +87,11 @@ class TestFraudGate:
 
     def test_vendor_mismatch_detected(self):
         """Test that vendor name mismatches are detected."""
+        from src.risk.fraud_gate import (
+            FraudCheckInput,
+            run_fraud_gate,
+        )
+        
         input_data = FraudCheckInput(
             trace_id="test-125",
             extracted_vendor_name="Completely Different Corp",
@@ -95,6 +106,11 @@ class TestFraudGate:
 
     def test_vendor_slight_name_variation(self):
         """Test that slight name variations don't trigger mismatch."""
+        from src.risk.fraud_gate import (
+            FraudCheckInput,
+            run_fraud_gate,
+        )
+        
         input_data = FraudCheckInput(
             trace_id="test-126",
             extracted_vendor_name="Test Vendor Inc",
@@ -108,6 +124,11 @@ class TestFraudGate:
 
     def test_no_bank_details_extracted(self):
         """Test when no bank details are on the invoice."""
+        from src.risk.fraud_gate import (
+            FraudCheckInput,
+            run_fraud_gate,
+        )
+        
         input_data = FraudCheckInput(
             trace_id="test-127",
             extracted_vendor_name="Test Vendor",
@@ -124,6 +145,11 @@ class TestFraudGate:
 
     def test_invalid_ifsc_format(self):
         """Test that invalid IFSC format is caught."""
+        from src.risk.fraud_gate import (
+            FraudCheckInput,
+            run_fraud_gate,
+        )
+        
         input_data = FraudCheckInput(
             trace_id="test-128",
             extracted_vendor_name="Test Vendor",
@@ -286,14 +312,13 @@ class TestIdempotency:
     @pytest.mark.asyncio
     async def test_idempotency_check_returns_existing(self):
         """Test that idempotency check finds existing invoices."""
-        # Mock the database
-        with patch("src.matching.duplicate.db") as mock_db:
-            mock_db.check_idempotency = AsyncMock(
-                return_value=(True, "existing-id", "executed")
-            )
+        from src.db import db as db_module
+        
+        with patch.object(db_module, "check_idempotency", new_callable=AsyncMock) as mock_check:
+            mock_check.return_value = (True, "existing-id", "executed")
             
             # This would be called in the duplicate check node
-            exists, existing_id, status = await mock_db.check_idempotency("some-key")
+            exists, existing_id, status = await db_module.check_idempotency("some-key")
             
             assert exists is True
             assert existing_id == "existing-id"
@@ -302,12 +327,12 @@ class TestIdempotency:
     @pytest.mark.asyncio
     async def test_idempotency_check_new_invoice(self):
         """Test that idempotency check allows new invoices."""
-        with patch("src.matching.duplicate.db") as mock_db:
-            mock_db.check_idempotency = AsyncMock(
-                return_value=(False, None, None)
-            )
+        from src.db import db as db_module
+        
+        with patch.object(db_module, "check_idempotency", new_callable=AsyncMock) as mock_check:
+            mock_check.return_value = (False, None, None)
             
-            exists, existing_id, status = await mock_db.check_idempotency("new-key")
+            exists, existing_id, status = await db_module.check_idempotency("new-key")
             
             assert exists is False
             assert existing_id is None

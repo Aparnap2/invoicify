@@ -26,8 +26,8 @@ os.environ["EXTRACTOR_MODE"] = "fixture"
 @pytest.fixture
 def mock_db():
     """Mock database for testing."""
-    mock MagicMock()
-    = mock.check_idempotency = AsyncMock(return_value=(False, None, None))
+    mock = MagicMock()
+    mock.check_idempotency = AsyncMock(return_value=(False, None, None))
     mock.get_or_create_vendor = AsyncMock(return_value="vendor-id-123")
     mock.create_invoice = AsyncMock(return_value="invoice-id-123")
     mock.get_vendor_by_name = AsyncMock(return_value={

@@ -223,7 +223,48 @@ async def process_invoice(file: UploadFile, tenant_id: str):
     # 6. Queue async processing
 ```
 
-### 3.2 Worker (Node.js)
+### 3.2 LangGraph AP Workflow State Machine
+
+```python
+# apps/agent-core/src/graph/ap_workflow.py
+
+from langgraph.graph import StateGraph
+from src.schemas.ap_models import APWorkflowState, StepResult
+
+# Define workflow nodes
+workflow = StateGraph(APWorkflowState)
+
+# Add nodes
+workflow.add_node("INGEST", ingest_node)
+workflow.add_node("EXTRACT", extract_node)
+workflow.add_node("ENRICH_CONTEXT", enrich_context_node)
+workflow.add_node("FRAUD_GATE", fraud_gate_node)
+workflow.add_node("DUPLICATE_CHECK", duplicate_check_node)
+workflow.add_node("THREE_WAY_MATCH", three_way_match_node)
+workflow.add_node("GL_CODING", gl_coding_node)
+workflow.add_node("DECISION", decision_node)
+workflow.add_node("DRAFT_RESOLUTION", draft_resolution_node)
+workflow.add_node("EXECUTE", execute_node)
+workflow.add_node("AUDIT_LOG", audit_log_node)
+
+# Define edges
+workflow.add_edge("__start__", "INGEST")
+workflow.add_edge("INGEST", "EXTRACT")
+workflow.add_edge("EXTRACT", "ENRICH_CONTEXT")
+workflow.add_edge("ENRICH_CONTEXT", "FRAUD_GATE")
+workflow.add_edge("FRAUD_GATE", "DUPLICATE_CHECK")
+workflow.add_edge("DUPLICATE_CHECK", "THREE_WAY_MATCH")
+workflow.add_edge("THREE_WAY_MATCH", "GL_CODING")
+workflow.add_edge("GL_CODING", "DECISION")
+workflow.add_edge("DECISION", "DRAFT_RESOLUTION")  # If HITL_REQUIRED
+workflow.add_edge("DECISION", "EXECUTE")  # If AUTO_APPROVE
+workflow.add_edge("DECISION", "AUDIT_LOG")  # If REJECT
+workflow.add_edge("DRAFT_RESOLUTION", "AUDIT_LOG")
+workflow.add_edge("EXECUTE", "AUDIT_LOG")
+workflow.add_edge("AUDIT_LOG", "__end__")
+```
+
+### 3.3 Worker (Node.js)
 
 ```typescript
 // invoicify-worker/src/server.ts
@@ -326,37 +367,117 @@ CREATE TABLE invoices (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- Vendors table
-CREATE TABLE vendors (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL,
-    name VARCHAR(255) NOT NULL,
-    tax_id VARCHAR(50),
-    email VARCHAR(255),
-    trust_level VARCHAR(20) DEFAULT 'PROBATION',
-    invoice_count INTEGER DEFAULT 0,
-    accurate_count INTEGER DEFAULT 0,
-    auto_approve_limit DECIMAL(10,2) DEFAULT 0,
-    created_at TIMESTAMP DEFAULT NOW()
+-- AP Workflow specific tables (NEW in v4.0)
+
+-- Idempotency key for deduplication
+CREATE TABLE invoices (
+    ...
+    idempotency_key VARCHAR(64) UNIQUE,
+    trace_id VARCHAR(36) DEFAULT gen_random_uuid(),
+    current_node VARCHAR(50),
+    fraud_check_passed BOOLEAN,
+    duplicate_check_passed BOOLEAN,
+    three_way_match_confidence DECIMAL(5,4),
+    gl_code VARCHAR(20),
+    human_task_id UUID REFERENCES human_tasks(id)
 );
 
--- Audit events table (append-only)
-CREATE TABLE audit_events (
+-- Invoice line items
+CREATE TABLE invoice_line_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     invoice_id UUID REFERENCES invoices(id),
-    event_type VARCHAR(50) NOT NULL,
-    actor VARCHAR(50) NOT NULL,
-    previous_state JSONB,
-    new_state JSONB,
-    reasoning TEXT,
+    line_number INTEGER,
+    description TEXT,
+    quantity DECIMAL(10,4),
+    unit_price DECIMAL(10,4),
+    total_amount DECIMAL(10,2),
+    gl_code VARCHAR(20),
+    po_line_id UUID REFERENCES po_line_items(id)
+);
+
+-- Purchase orders
+CREATE TABLE purchase_orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    vendor_id UUID REFERENCES vendors(id),
+    po_number VARCHAR(50) NOT NULL,
+    po_date DATE,
+    total_amount DECIMAL(10,2),
+    status VARCHAR(20) DEFAULT 'OPEN',
     created_at TIMESTAMP DEFAULT NOW()
 );
 
--- Indexes
-CREATE INDEX idx_invoices_tenant ON invoices(tenant_id);
-CREATE INDEX idx_invoices_status ON invoices(status);
-CREATE INDEX idx_vendors_tenant ON vendors(tenant_id);
-CREATE INDEX idx_audit_events_invoice ON audit_events(invoice_id);
+-- PO line items
+CREATE TABLE po_line_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    po_id UUID REFERENCES purchase_orders(id),
+    line_number INTEGER,
+    description TEXT,
+    quantity DECIMAL(10,4),
+    unit_price DECIMAL(10,4),
+    total_amount DECIMAL(10,2),
+    gl_code VARCHAR(20)
+);
+
+-- Receipts (goods received)
+CREATE TABLE receipts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL,
+    po_id UUID REFERENCES purchase_orders(id),
+    receipt_number VARCHAR(50),
+    receipt_date DATE,
+    status VARCHAR(20) DEFAULT 'RECEIVED',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Receipt line items
+CREATE TABLE receipt_line_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    receipt_id UUID REFERENCES receipts(id),
+    po_line_id UUID REFERENCES po_line_items(id),
+    quantity_received DECIMAL(10,4),
+    quantity_invoiced DECIMAL(10,4),
+    variance DECIMAL(10,4)
+);
+
+-- Human tasks for HITL approval
+CREATE TABLE human_tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    trace_id VARCHAR(36) NOT NULL,
+    task_type VARCHAR(50) NOT NULL,
+    payload_json JSONB,
+    status VARCHAR(20) DEFAULT 'PENDING',
+    assigned_to VARCHAR(255),
+    resolution_notes TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    resolved_at TIMESTAMP
+);
+
+-- Immutable audit logs
+CREATE TABLE audit_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    trace_id VARCHAR(36) NOT NULL,
+    node_name VARCHAR(50) NOT NULL,
+    input_hash VARCHAR(64),
+    output_hash VARCHAR(64),
+    status VARCHAR(20) NOT NULL,
+    confidence DECIMAL(5,4),
+    reasons JSONB,
+    artifacts JSONB,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes for AP workflow
+CREATE INDEX idx_invoices_idempotency ON invoices(idempotency_key);
+CREATE INDEX idx_invoices_trace_id ON invoices(trace_id);
+CREATE INDEX idx_invoice_line_items_invoice ON invoice_line_items(invoice_id);
+CREATE INDEX idx_purchase_orders_vendor ON purchase_orders(vendor_id);
+CREATE INDEX idx_purchase_orders_po_number ON purchase_orders(po_number);
+CREATE INDEX idx_po_line_items_po ON po_line_items(po_id);
+CREATE INDEX idx_receipts_po ON receipts(po_id);
+CREATE INDEX idx_audit_logs_trace ON audit_logs(trace_id);
+CREATE INDEX idx_human_tasks_trace ON human_tasks(trace_id);
+CREATE INDEX idx_human_tasks_status ON human_tasks(status);
 ```
 
 ### 4.2 Entity Relationship
@@ -368,51 +489,14 @@ erDiagram
     VENDORS ||--o{ INVOICES : supplies
     INVOICES ||--o{ AUDIT_EVENTS : has
     INVOICES ||--o| QUICKBOOKS_BILLS : synced_to
-    
-    TENANTS {
-        uuid id PK
-        string name
-        string slug
-        timestamp created_at
-    }
-    
-    VENDORS {
-        uuid id PK
-        uuid tenant_id FK
-        string name
-        string tax_id
-        string trust_level
-        int invoice_count
-        int accurate_count
-    }
-    
-    INVOICES {
-        uuid id PK
-        uuid tenant_id FK
-        uuid vendor_id FK
-        string invoice_number
-        decimal total_amount
-        string status
-        string decision
-        jsonb extracted_data
-    }
-    
-    AUDIT_EVENTS {
-        uuid id PK
-        uuid invoice_id FK
-        string event_type
-        jsonb previous_state
-        jsonb new_state
-        text reasoning
-    }
-    
-    QUICKBOOKS_BILLS {
-        uuid id PK
-        uuid invoice_id FK
-        string qb_bill_id
-        timestamp synced_at
-    }
-```
+    INVOICES ||--o{ INVOICE_LINE_ITEMS : has
+    INVOICES ||--o{ HUMAN_TASKS : triggers
+    PURCHASE_ORDERS ||--o{ PO_LINE_ITEMS : has
+    PURCHASE_ORDERS ||--o{ RECEIPTS : generates
+    RECEIPTS ||--o{ RECEIPT_LINE_ITEMS : has
+    PO_LINE_ITEMS ||--o{ INVOICE_LINE_ITEMS : matches
+    PO_LINE_ITEMS ||--o{ RECEIPT_LINE_ITEMS : matches
+    AUDIT_LOGS ||--o{ INVOICES : tracks
 
 ---
 
@@ -552,6 +636,29 @@ resource queue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-05-0
   name: 'invoice-processing'
 }
 
+// Azure AI Search (Free tier - 3 indexes, 50MB)
+resource search 'Microsoft.Search/searchServices@2023-03-01' = {
+  name: '${appName}-search'
+  location: location
+  sku: {
+    name: 'free'
+  }
+  properties: {
+    partitionCount: 1
+    replicaCount: 1
+  }
+}
+
+// Document Intelligence (Free tier - 500 pages/month)
+resource docIntel 'Microsoft.CognitiveServices/accounts@2023-05-01' = {
+  name: '${appName}-docintel'
+  location: location
+  kind: 'FormRecognizer'
+  sku: {
+    name: 'F0'
+  }
+}
+
 // Container Apps Environment
 resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: '${appName}-env'
@@ -592,7 +699,73 @@ resource workerApp 'Microsoft.App/containerApps@2024-03-01' = {
 }
 ```
 
-### 6.2 CI/CD Pipeline
+### 6.2 Azure AI Search Indexes (Free Tier - 3 Max)
+
+| Index Name | Purpose | Fields | Size Estimate |
+|------------|---------|--------|---------------|
+| `vendor_memory` | Vendor facts, bank hashes, trust stats | vendor_id, name, normalized_name, bank_hash, trust_level, invoice_count, accurate_count, contacts | ~5 MB |
+| `ap_history` | Historical invoices + GL codes + embeddings | invoice_id, vendor_id, invoice_number, total, line_items, gl_code, embedding | ~40 MB |
+| `po_receipt` | PO lines + receipts embeddings | po_id, po_number, line_items, receipts, embedding | ~5 MB |
+
+```python
+# Index schemas for Azure AI Search
+
+# vendor_memory index
+{
+    "name": "vendor_memory",
+    "fields": [
+        {"name": "vendor_id", "type": "Edm.String", "key": true},
+        {"name": "tenant_id", "type": "Edm.String", "filterable": true},
+        {"name": "name", "type": "Edm.String", "searchable": true},
+        {"name": "normalized_name", "type": "Edm.String", "filterable": true},
+        {"name": "bank_hash", "type": "Edm.String", "filterable": true},
+        {"name": "verified_bank_account", "type": "Edm.String", "filterable": true},
+        {"name": "trust_level", "type": "Edm.String", "filterable": true},
+        {"name": "invoice_count", "type": "Edm.Int32"},
+        {"name": "accurate_count", "type": "Edm.Int32"},
+        {"name": "auto_approve_limit", "type": "Edm.Double"},
+        {"name": "contacts", "type": "Collection(Edm.String)"},
+        {"name": "last_invoice_date", "type": "Edm.DateTimeOffset"}
+    ]
+}
+
+# ap_history index
+{
+    "name": "ap_history",
+    "fields": [
+        {"name": "invoice_id", "type": "Edm.String", "key": true},
+        {"name": "trace_id", "type": "Edm.String", "filterable": true},
+        {"name": "vendor_id", "type": "Edm.String", "filterable": true},
+        {"name": "invoice_number", "type": "Edm.String", "searchable": true},
+        {"name": "invoice_date", "type": "Edm.DateTimeOffset", "filterable": true},
+        {"name": "total", "type": "Edm.Double", "filterable": true},
+        {"name": "currency", "type": "Edm.String", "filterable": true},
+        {"name": "line_items", "type": "Collection(Edm.String)"},
+        {"name": "gl_code", "type": "Edm.String", "filterable": true},
+        {"name": "decision", "type": "Edm.String", "filterable": true},
+        {"name": "description_embedding", "type": "Collection(Edm.Single)", "searchable": true}
+    ]
+}
+
+# po_receipt index
+{
+    "name": "po_receipt",
+    "fields": [
+        {"name": "po_id", "type": "Edm.String", "key": true},
+        {"name": "tenant_id", "type": "Edm.String", "filterable": true},
+        {"name": "vendor_id", "type": "Edm.String", "filterable": true},
+        {"name": "po_number", "type": "Edm.String", "searchable": true},
+        {"name": "po_date", "type": "Edm.DateTimeOffset", "filterable": true},
+        {"name": "total", "type": "Edm.Double", "filterable": true},
+        {"name": "status", "type": "Edm.String", "filterable": true},
+        {"name": "line_items", "type": "Collection(Edm.String)"},
+        {"name": "receipts", "type": "Collection(Edm.String)"},
+        {"name": "description_embedding", "type": "Collection(Edm.Single)", "searchable": true}
+    ]
+}
+```
+
+### 6.3 CI/CD Pipeline
 
 ```yaml
 # .github/workflows/azure-deploy.yml
