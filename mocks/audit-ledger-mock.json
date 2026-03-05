@@ -1,0 +1,163 @@
+{
+  "uuid": "audit-ledger-mock-v1",
+  "name": "Invoicify Audit Ledger Mock",
+  "endpointPrefix": "",
+  "port": 3050,
+  "hostname": "0.0.0.0",
+  "https": false,
+  "cors": true,
+  "headers": [{"key": "Content-Type", "value": "application/json"}],
+  "proxyMode": false,
+  "routes": [
+    {
+      "uuid": "audit-health",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/health",
+      "documentation": "Health check",
+      "responses": [{
+        "uuid": "audit-health-ok",
+        "label": "Healthy",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"status\": \"healthy\", \"service\": \"audit-ledger-mock\", \"port\": 3050}",
+        "latency": 10,
+        "statusCode": 200
+      }]
+    },
+    {
+      "uuid": "audit-record",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/audit/events",
+      "documentation": "Record an audit event",
+      "responses": [{
+        "uuid": "audit-record-success",
+        "label": "Event Recorded",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"id\": \"{{faker 'string.uuid'}}\", \"success\": true, \"timestamp\": \"{{now}}\"}",
+        "latency": 50,
+        "statusCode": 201
+      }]
+    },
+    {
+      "uuid": "audit-query",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/audit/events",
+      "documentation": "Query audit events",
+      "responses": [{
+        "uuid": "audit-query-success",
+        "label": "Query Success",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"events\": [], \"total\": 0}",
+        "latency": 100,
+        "statusCode": 200
+      }]
+    },
+    {
+      "uuid": "audit-by-invoice",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/audit/invoice/:invoiceId",
+      "documentation": "Get audit trail for an invoice",
+      "responses": [{
+        "uuid": "audit-by-invoice-success",
+        "label": "Trail Retrieved",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"invoice_id\": \"{{url 'invoiceId'}}\", \"events\": [{\"event_type\": \"CREATED\", \"timestamp\": \"{{now}}\", \"actor\": \"system\"}]}",
+        "latency": 100,
+        "statusCode": 200
+      }]
+    },
+    {
+      "uuid": "audit-quickbooks-callback",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/audit/quickbooks/bill-created",
+      "documentation": "Callback from QuickBooks mock",
+      "responses": [{
+        "uuid": "audit-qb-callback-ok",
+        "label": "Callback Received",
+        "headers": [],
+        "body": "",
+        "latency": 10,
+        "statusCode": 202
+      }]
+    },
+    {
+      "uuid": "audit-quickbooks-vendor-callback",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/audit/quickbooks/vendor-created",
+      "documentation": "Callback for vendor creation",
+      "responses": [{
+        "uuid": "audit-qb-vendor-ok",
+        "label": "Callback Received",
+        "headers": [],
+        "body": "",
+        "latency": 10,
+        "statusCode": 202
+      }]
+    },
+    {
+      "uuid": "audit-salesforce-callback",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/audit/salesforce/activity-created",
+      "documentation": "Callback from Salesforce mock",
+      "responses": [{
+        "uuid": "audit-sf-callback-ok",
+        "label": "Callback Received",
+        "headers": [],
+        "body": "",
+        "latency": 10,
+        "statusCode": 202
+      }]
+    },
+    {
+      "uuid": "audit-eventgrid-callback",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/audit/eventgrid/blob-created",
+      "documentation": "Callback from Event Grid mock",
+      "responses": [{
+        "uuid": "audit-eg-callback-ok",
+        "label": "Callback Received",
+        "headers": [],
+        "body": "",
+        "latency": 10,
+        "statusCode": 202
+      }]
+    },
+    {
+      "uuid": "audit-ledger-export",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/audit/export",
+      "documentation": "Export audit ledger to file",
+      "responses": [{
+        "uuid": "audit-export-success",
+        "label": "Export Started",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"export_id\": \"{{faker 'string.uuid'}}\", \"status\": \"processing\", \"format\": \"json\"}",
+        "latency": 100,
+        "statusCode": 202
+      }]
+    },
+    {
+      "uuid": "audit-ledger-stats",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/audit/stats",
+      "documentation": "Get audit ledger statistics",
+      "responses": [{
+        "uuid": "audit-stats-success",
+        "label": "Stats Retrieved",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"total_events\": 0, \"events_today\": 0, \"invoices_processed\": 0, \"avg_latency_ms\": 50}",
+        "latency": 50,
+        "statusCode": 200
+      }]
+    }
+  ]
+}

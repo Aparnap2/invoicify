@@ -1,0 +1,213 @@
+{
+  "uuid": "azure-eventgrid-mock-v1",
+  "name": "Azure Event Grid & Storage Mocks",
+  "endpointPrefix": "",
+  "port": 3030,
+  "hostname": "0.0.0.0",
+  "https": false,
+  "cors": true,
+  "headers": [{"key": "Content-Type", "value": "application/json"}],
+  "proxyMode": false,
+  "routes": [
+    {
+      "uuid": "eg-health",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/health",
+      "documentation": "Health check",
+      "responses": [{
+        "uuid": "eg-health-ok",
+        "label": "Healthy",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"status\": \"healthy\", \"service\": \"azure-eventgrid-mock\", \"port\": 3030}",
+        "latency": 10,
+        "statusCode": 200
+      }]
+    },
+    {
+      "uuid": "eg-validation",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/api/events",
+      "documentation": "Event Grid subscription validation",
+      "rules": [{"target": "body", "modifier": "0.eventType", "value": "Microsoft.EventGrid.SubscriptionValidationEvent", "operator": "equals"}],
+      "responses": [{
+        "uuid": "eg-validation-response",
+        "label": "Validation Response",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\n  \"validationResponse\": \"{{body '0.data.validationCode'}}\"\n}",
+        "latency": 50,
+        "statusCode": 200
+      }]
+    },
+    {
+      "uuid": "eg-blob-created",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/api/events",
+      "documentation": "Blob created event",
+      "rules": [{"target": "body", "modifier": "0.eventType", "value": "Microsoft.Storage.BlobCreated", "operator": "equals"}],
+      "responses": [{
+        "uuid": "eg-blob-accepted",
+        "label": "Event Accepted",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "",
+        "latency": 50,
+        "statusCode": 200,
+        "callbacks": [{
+          "uuid": "eg-blob-callback",
+          "uri": "http://localhost:3050/audit/eventgrid/blob-created",
+          "method": "POST",
+          "body": "{\"event\": \"blob_created\", \"blob_url\": \"{{body '0.data.url'}}\", \"timestamp\": \"{{now}}\"}"
+        }]
+      }]
+    },
+    {
+      "uuid": "blob-upload",
+      "type": "http",
+      "method": "put",
+      "endpoint": "/invoices/:filename",
+      "documentation": "Upload invoice PDF to blob storage",
+      "responses": [{
+        "uuid": "blob-upload-success",
+        "label": "Upload Success",
+        "headers": [
+          {"key": "ETag", "value": "\"{{faker 'string.alphanumeric' 32}}\""},
+          {"key": "x-ms-request-id", "value": "{{faker 'string.uuid'}}"}
+        ],
+        "body": "",
+        "latency": 200,
+        "statusCode": 201
+      }]
+    },
+    {
+      "uuid": "blob-get",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/invoices/:filename",
+      "documentation": "Get invoice PDF from blob storage",
+      "responses": [{
+        "uuid": "blob-get-success",
+        "label": "Get Success",
+        "headers": [
+          {"key": "Content-Type", "value": "application/pdf"},
+          {"key": "ETag", "value": "\"mock-etag\""}
+        ],
+        "body": "%PDF-1.4\n%MOCK PDF CONTENT",
+        "latency": 100,
+        "statusCode": 200
+      }]
+    },
+    {
+      "uuid": "blob-list",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/invoices",
+      "documentation": "List invoices in blob storage",
+      "responses": [{
+        "uuid": "blob-list-success",
+        "label": "List Success",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"blobs\": [{\"name\": \"INV-2025-001.pdf\", \"size\": 102400, \"created\": \"2025-01-01T00:00:00Z\"}]}",
+        "latency": 100,
+        "statusCode": 200
+      }]
+    },
+    {
+      "uuid": "blob-delete",
+      "type": "http",
+      "method": "delete",
+      "endpoint": "/invoices/:filename",
+      "documentation": "Delete invoice PDF from blob storage",
+      "responses": [{
+        "uuid": "blob-delete-success",
+        "label": "Delete Success",
+        "headers": [],
+        "body": "",
+        "latency": 100,
+        "statusCode": 204
+      }]
+    },
+    {
+      "uuid": "queue-send",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/queue/invoice-processing/messages",
+      "documentation": "Send message to invoice processing queue",
+      "responses": [{
+        "uuid": "queue-send-success",
+        "label": "Message Sent",
+        "headers": [
+          {"key": "x-ms-message-id", "value": "{{faker 'string.uuid'}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": "",
+        "latency": 100,
+        "statusCode": 201
+      }]
+    },
+    {
+      "uuid": "queue-receive",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/queue/invoice-processing/messages",
+      "documentation": "Receive message from invoice processing queue",
+      "responses": [{
+        "uuid": "queue-receive-success",
+        "label": "Message Received",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"messages\": [{\"id\": \"msg-001\", \"content\": \"{\\\"invoice_id\\\": \\\"INV-2025-001\\\", \\\"blob_url\\\": \\\"http://localhost:3030/invoices/INV-2025-001.pdf\\\"}\", \"insertion_time\": \"{{now}}\"}]}",
+        "latency": 100,
+        "statusCode": 200
+      }]
+    },
+    {
+      "uuid": "queue-delete",
+      "type": "http",
+      "method": "delete",
+      "endpoint": "/queue/invoice-processing/messages/:messageId",
+      "documentation": "Delete message from queue",
+      "responses": [{
+        "uuid": "queue-delete-success",
+        "label": "Message Deleted",
+        "headers": [],
+        "body": "",
+        "latency": 50,
+        "statusCode": 204
+      }]
+    },
+    {
+      "uuid": "di-analyze",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/formrecognizer/documentModels/prebuilt-invoice:analyze",
+      "documentation": "Azure Document Intelligence - Analyze invoice",
+      "responses": [{
+        "uuid": "di-analyze-started",
+        "label": "Analysis Started",
+        "headers": [
+          {"key": "Operation-Location", "value": "http://localhost:3040/formrecognizer/documentModels/prebuilt-invoice/analyzeResults/op-{{faker 'string.alphanumeric' 32}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": "",
+        "latency": 500,
+        "statusCode": 202
+      }]
+    },
+    {
+      "uuid": "di-result",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/formrecognizer/documentModels/prebuilt-invoice/analyzeResults/:operationId",
+      "documentation": "Get Document Intelligence analysis result",
+      "responses": [{
+        "uuid": "di-result-success",
+        "label": "Analysis Complete",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\n  \"status\": \"succeeded\",\n  \"createdDateTime\": \"2025-01-01T00:00:00Z\",\n  \"lastUpdatedDateTime\": \"{{now}}\",\n  \"analyzeResult\": {\n    \"apiVersion\": \"2023-07-31\",\n    \"modelId\": \"prebuilt-invoice\",\n    \"content\": \"INVOICE\\nAcme Corporation\\n123 Business Street\\nSan Francisco, CA 94105\\nInvoice #: INV-2025-001\\nAmount: $1,620.00\",\n    \"pages\": [{\"pageNumber\": 1, \"width\": 8.5, \"height\": 11, \"unit\": \"inch\"}],\n    \"documents\": [{\n      \"docType\": \"prebuilt:invoice\",\n      \"boundingRegions\": [{\"pageNumber\": 1, \"polygon\": [0, 0, 8.5, 0, 8.5, 11, 0, 11]}],\n      \"fields\": {\n        \"VendorName\": {\"type\": \"string\", \"valueString\": \"Acme Corporation\", \"confidence\": 0.98},\n        \"InvoiceId\": {\"type\": \"string\", \"valueString\": \"INV-2025-001\", \"confidence\": 0.99},\n        \"InvoiceDate\": {\"type\": \"date\", \"valueDate\": \"2025-01-01\", \"confidence\": 0.97},\n        \"DueDate\": {\"type\": \"date\", \"valueDate\": \"2025-01-31\", \"confidence\": 0.96},\n        \"InvoiceTotal\": {\"type\": \"number\", \"valueNumber\": 1620.00, \"confidence\": 0.99},\n        \"AmountDue\": {\"type\": \"number\", \"valueNumber\": 1620.00, \"confidence\": 0.99},\n        \"Items\": {\n          \"type\": \"array\",\n          \"valueArray\": [{\n            \"type\": \"object\",\n            \"valueObject\": {\n              \"Description\": {\"type\": \"string\", \"valueString\": \"Professional Services\", \"confidence\": 0.95},\n              \"Quantity\": {\"type\": \"number\", \"valueNumber\": 10, \"confidence\": 0.97},\n              \"UnitPrice\": {\"type\": \"number\", \"valueNumber\": 150.00, \"confidence\": 0.98},\n              \"Amount\": {\"type\": \"number\", \"valueNumber\": 1500.00, \"confidence\": 0.99}\n            }\n          }]\n        }\n      },\n      \"confidence\": 0.98\n    }]\n  }\n}",
+        "latency": 200,
+        "statusCode": 200
+      }]
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "uuid": "quickbooks-prod-mock-2026",
+  "lastMigration": 29,
+  "name": "QuickBooks Online API Mock",
+  "endpointPrefix": "v3",
+  "latency": 100,
+  "port": 3010,
+  "hostname": "",
+  "folders": [
+    {
+      "uuid": "bills-folder",
+      "name": "Bills"
+    },
+    {
+      "uuid": "vendors-folder",
+      "name": "Vendors"
+    }
+  ],
+  "routes": [
+    {
+      "uuid": "create-bill",
+      "type": "http",
+      "method": "post",
+      "endpoint": "company/:realmId/bill",
+      "responses": [
+        {
+          "latency": 150,
+          "statusCode": 200,
+          "label": "Bill Created",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"Bill\": {\n    \"Id\": \"{{faker 'datatype.number' min=1000 max=9999}}\",\n    \"SyncToken\": \"0\",\n    \"MetaData\": {\n      \"CreateTime\": \"{{now}}\",\n      \"LastUpdatedTime\": \"{{now}}\"\n    },\n    \"DocNumber\": \"{{body 'DocNumber'}}\",\n    \"TotalAmt\": {{body 'TotalAmt'}},\n    \"VendorRef\": {\n      \"value\": \"{{body 'VendorRef.value'}}\"\n    }\n  },\n  \"time\": \"{{now}}\"\n}"
+        }
+      ]
+    },
+    {
+      "uuid": "get-bill",
+      "type": "http",
+      "method": "get",
+      "endpoint": "company/:realmId/bill/:billId",
+      "responses": [
+        {
+          "latency": 100,
+          "statusCode": 200,
+          "label": "Bill Retrieved",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"Bill\": {\n    \"Id\": \"{{url 'billId'}}\",\n    \"SyncToken\": \"0\",\n    \"DocNumber\": \"INV-{{faker 'datatype.number' min=1000 max=9999}}\",\n    \"TotalAmt\": {{faker 'datatype.number' min=1000 max=10000}},\n    \"VendorRef\": {\n      \"value\": \"Test Vendor\"\n    }\n  },\n  \"time\": \"{{now}}\"\n}"
+        }
+      ]
+    },
+    {
+      "uuid": "query-vendor",
+      "type": "http",
+      "method": "post",
+      "endpoint": "company/:realmId/query",
+      "responses": [
+        {
+          "latency": 120,
+          "statusCode": 200,
+          "label": "Vendor Query",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"QueryResponse\": {\n    \"Vendor\": [\n      {\n        \"Id\": \"{{faker 'datatype.number' min=1 max=100}}\",\n        \"DisplayName\": \"{{body 'VendorName'}}\",\n        \"Active\": true,\n        \"Balance\": 0\n      }\n    ],\n    \"startPosition\": 1,\n    \"maxResults\": 1\n  },\n  \"time\": \"{{now}}\"\n}"
+        }
+      ]
+    }
+  ],
+  "proxyMode": false,
+  "proxyHost": "",
+  "proxyRemovePrefix": false,
+  "tlsOptions": {
+    "enabled": false
+  },
+  "cors": true,
+  "headers": [
+    {
+      "key": "Access-Control-Allow-Origin",
+      "value": "*"
+    },
+    {
+      "key": "Access-Control-Allow-Methods",
+      "value": "GET,POST,PUT,DELETE,OPTIONS"
+    },
+    {
+      "key": "Access-Control-Allow-Headers",
+      "value": "Content-Type,Authorization"
+    }
+  ],
+  "proxyReqHeaders": [],
+  "proxyResHeaders": [],
+  "responseMode": null
+}
