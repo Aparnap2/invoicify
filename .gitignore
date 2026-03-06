@@ -31,6 +31,8 @@ secrets/
 *.credentials
 *credentials.json
 *service-account.json
+# QuickBooks MCP token storage
+apps/agent-core/.secrets/
 
 # ── Build Artifacts ─────────────────────────────────────────────────────────
 .next/

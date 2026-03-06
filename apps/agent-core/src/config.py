@@ -1,7 +1,9 @@
 """Configuration management for Invoicify Agent Core.
 
-Azure-native defaults. All Cloudflare / Ollama / Neo4j primitives removed.
+Azure-native configuration. Uses Postgres, Azure Storage, Azure DI.
 Environment variables map 1:1 to Azure Container Apps secrets.
+
+Voice agent (Sarvam STT) and Edge API (Cloudflare Worker) removed.
 """
 
 from functools import lru_cache
@@ -41,7 +43,14 @@ class Settings(BaseSettings):
     # Azure Container Apps production default: azure_di
     extractor_mode: str = Field(
         default="azure_di",
-        description="Extraction backend. Use 'fixture' for tests, 'azure_di' for production.",
+        description="""
+Extraction backend selection:
+
+- 'fixture'   → Hardcoded data (CI, no-key environments)
+- 'azure_di'  → Azure Document Intelligence (international demos)
+- 'sarvam'    → Sarvam Akshar OCR (Indian demos, Hindi/regional)
+- 'ollama'    → Local Ollama (local dev, no API keys)
+""",
     )
 
     # ── Azure Document Intelligence ───────────────────────────────────────────
@@ -142,10 +151,52 @@ class Settings(BaseSettings):
     payroll_amount: float = Field(default=15000)
     payroll_date: str = Field(default="15")
 
-    # ── Edge API (the Hono worker) ────────────────────────────────────────────
-    edge_api_base_url: str = Field(
-        default="http://invoicify-worker",
-        description="Internal URL of the Hono worker Container App.",
+    # ── QuickBooks Online ─────────────────────────────────────────────────────
+    # OAuth 2.0 credentials for QBO API access
+    # Get tokens: https://developer.intuit.com/app/developer/playground
+    quickbooks_client_id: Optional[str] = Field(
+        default=None,
+        description="QuickBooks Online OAuth 2.0 Client ID",
+    )
+    quickbooks_client_secret: Optional[str] = Field(
+        default=None,
+        description="QuickBooks Online OAuth 2.0 Client Secret",
+    )
+    quickbooks_realm_id: Optional[str] = Field(
+        default=None,
+        description="QuickBooks Online Realm ID (Company ID)",
+    )
+    quickbooks_refresh_token: Optional[str] = Field(
+        default=None,
+        description="QuickBooks Online OAuth 2.0 Refresh Token",
+    )
+    quickbooks_sandbox: bool = Field(
+        default=True,
+        description="Use QuickBooks sandbox environment (true) or production (false)",
+    )
+
+    # ── Salesforce ────────────────────────────────────────────────────────────
+    # JWT Bearer Flow credentials for Salesforce API access
+    # Create Connected App: Setup → App Manager → New Connected App
+    salesforce_consumer_key: Optional[str] = Field(
+        default=None,
+        description="Salesforce Connected App Consumer Key",
+    )
+    salesforce_username: Optional[str] = Field(
+        default=None,
+        description="Salesforce username (must be pre-authorized in Connected App)",
+    )
+    salesforce_private_key_pem: Optional[str] = Field(
+        default=None,
+        description="Path to RSA private key PEM file or PEM content string",
+    )
+    salesforce_instance_url: Optional[str] = Field(
+        default=None,
+        description="Salesforce instance URL (e.g., https://yourorg.my.salesforce.com)",
+    )
+    salesforce_sandbox: bool = Field(
+        default=True,
+        description="Use Salesforce sandbox (test.salesforce.com) or production",
     )
 
     @field_validator("log_level")

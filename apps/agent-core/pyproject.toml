@@ -41,6 +41,14 @@ dependencies = [
     # Resilience
     "tenacity>=9.1.4",
 
+    # MCP (Model Context Protocol)
+    "mcp>=1.0.0",
+    "langchain-mcp-adapters>=0.1.0",
+
+    # JWT & Cryptography (Salesforce OAuth)
+    "PyJWT>=2.10.0",
+    "cryptography>=44.0.0",
+
     # Invoice PDF generation
     "reportlab>=4.4.10",
     "pillow>=11.3.0",
@@ -48,6 +56,13 @@ dependencies = [
     # Testing
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "types-cryptography>=3.3.23.2",
+    "types-pyjwt>=1.7.1",
 ]
 
 # REMOVED (Azure replacements above):

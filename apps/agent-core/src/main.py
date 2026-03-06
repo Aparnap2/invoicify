@@ -8,7 +8,7 @@ import json
 from typing import Dict, Any, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from src.utils.edge_callback import update_invoice_status
+from src.db.status import update_invoice_status
 from src.queue.azure_queue import AzureQueueConsumer
 
 # Configure Structured Logging
