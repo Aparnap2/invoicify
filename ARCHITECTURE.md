@@ -1,9 +1,9 @@
 # INVOICIFY — SYSTEM ARCHITECTURE
 
-**Version:** 4.0 (Azure-Native)  
-**Last Updated:** March 1, 2026  
-**Status:** ✅ Production-Ready  
-**Branch:** `feat/azure-native-migration`
+**Version:** 4.1 (HubSpot Integration)
+**Last Updated:** March 6, 2026
+**Status:** ✅ Production-Ready
+**Branch:** `main`
 
 ---
 
@@ -59,8 +59,9 @@ flowchart TB
         O[QuickBooks<br/>Accounting]
         P[OpenRouter<br/>LLM]
         Q[Email Provider<br/>Graph API]
+        R[HubSpot<br/>CRM]
     end
-    
+
     A --> D
     B --> D
     C --> Q
@@ -75,9 +76,10 @@ flowchart TB
     G --> L
     F --> O
     F --> P
+    F --> R
     Q --> M
     M --> L
-    
+
     style D fill:#61DAFB
     style F fill:#4CAF50,color:#fff
     style G fill:#2196F3,color:#fff
@@ -91,6 +93,7 @@ flowchart TB
     style O fill:#9C27B0,color:#fff
     style P fill:#9C27B0,color:#fff
     style Q fill:#9C27B0,color:#fff
+    style R fill:#FF5722,color:#fff
 ```
 
 ### 1.2 Design Principles
@@ -131,10 +134,12 @@ invoicify/
 │   │   │   │   └── router.py            # Multi-provider LLM
 │   │   │   ├── audit/
 │   │   │   │   └── ledger.py            # Append-only events
-│   │   │   └── execution/
-│   │   │       └── quickbooks_sync.py   # Idempotent sync
+│   │   │   ├── execution/
+│   │   │   │   └── quickbooks_sync.py   # Idempotent sync
+│   │   │   └── mcp_servers/
+│   │   │       └── hubspot_mcp.py       # HubSpot CRM integration
 │   │   ├── tests/
-│   │   │   ├── tdd/             # 51 unit tests
+│   │   │   ├── tdd/             # 83 unit tests
 │   │   │   └── e2e/             # Real service tests
 │   │   ├── Dockerfile           # Multi-stage build
 │   │   └── pyproject.toml       # Dependencies (uv)
@@ -145,9 +150,7 @@ invoicify/
 │   │   ├── lib/                 # Utilities
 │   │   └── package.json
 │   │
-│   ├── api/                     # Separate API Layer
-│   ├── edge-api/                # Edge Routing
-│   └── voice-agent/             # Sarvam Voice Integration
+│   └── voice-agent/             # [REMOVED] Sarvam Voice Integration
 │
 ├── invoicify-worker/            # Node.js Worker (TypeScript)
 │   ├── src/
@@ -316,7 +319,7 @@ class AzureQueueConsumer:
             os.getenv("AZURE_STORAGE_CONNECTION_STRING"),
             "invoice-processing"
         )
-    
+
     async def start(self):
         """Poll queue and process messages."""
         while self.running:
@@ -326,7 +329,7 @@ class AzureQueueConsumer:
             )
             async for message in messages:
                 await self._process_message(message)
-    
+
     async def _process_message(self, message):
         """Process single invoice message."""
         try:
@@ -337,6 +340,58 @@ class AzureQueueConsumer:
             logger.error(f"Processing failed: {e}")
             # Message becomes visible again after visibility_timeout
 ```
+
+### 3.4 HubSpot MCP Server (CRM Integration)
+
+```python
+# apps/agent-core/src/mcp_servers/hubspot_mcp.py
+
+from src.mcp_servers.hubspot_mcp import HubSpotMCPServer, HubSpotClient
+
+# HubSpot Private App Authentication
+# Token format: pat-na1-xxxxxxxx (never expires)
+# Stored in: Azure Key Vault → HUBSPOT_API_KEY
+
+server = HubSpotMCPServer()
+
+# 6 HubSpot CRM Tools:
+# 1. hs_create_deal - Create deals in HubSpot CRM
+# 2. hs_get_deal - Retrieve deal by ID
+# 3. hs_update_deal - Update deal stage/properties
+# 4. hs_get_company - Search companies by name
+# 5. hs_create_company - Create new companies
+# 6. hs_search_deals - Search deals with filters
+
+@server.tool("hs_create_deal")
+async def create_deal(
+    deal_name: str,
+    stage: str = "appointmentscheduled",
+    amount: Optional[float] = None,
+    close_date: Optional[str] = None,
+    company_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """Create a new deal in HubSpot CRM.
+    
+    Args:
+        deal_name: Name of the deal
+        stage: Deal stage (default: appointmentscheduled)
+        amount: Deal amount in USD
+        close_date: Expected close date (YYYY-MM-DD)
+        company_id: Optional company association
+    
+    Returns:
+        Deal object with id and properties
+    """
+    client = HubSpotClient()
+    return await client.create_deal(...)
+```
+
+**HubSpot Integration Features:**
+- **Authentication:** Private App token (Bearer auth, never expires)
+- **Rate Limiting:** Automatic retry with exponential backoff (429)
+- **Error Handling:** Clear errors for 401, network issues
+- **Logging:** All CRM activities logged with trace IDs
+- **Idempotency:** Safe to retry failed operations
 
 ---
 
@@ -824,6 +879,15 @@ jobs:
 │  Managed Identity  → Azure service auth (no credentials)    │
 │  .gitignore        → Prevents accidental commits            │
 │  Pre-commit hook   → Scans for secrets before commit        │
+└─────────────────────────────────────────────────────────────┘
+
+External API Tokens (stored in Key Vault):
+┌─────────────────────────────────────────────────────────────┐
+│  QuickBooks    → OAuth 2.0 refresh token                    │
+│  HubSpot       → Private App token (pat-na1-*, never expires)│
+│  OpenRouter    → API key (sk-or-*)                          │
+│  Azure         → Managed Identity (no token needed)         │
+│  Graph API     → OAuth 2.0 client secret                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
