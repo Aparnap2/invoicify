@@ -10,7 +10,7 @@
 
 ### 2. Infrastructure Components (READY)
 - ✅ Docker Compose (Temporal, Neo4j, Qdrant, Postgres)
-- ✅ Mockoon configuration (QuickBooks/Salesforce mocks)
+- ✅ Mockoon configuration (QuickBooks/HubSpot mocks)
 - ✅ R2 Internal Proxy (`/internal/r2/*`)
 - ✅ Presigned URL generation in Edge API
 - ✅ Environment files (`.env`, `.dev.vars`)

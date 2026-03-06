@@ -12,7 +12,7 @@ This test suite validates the complete invoice processing workflow:
 4. **LLM Parsing** - OpenRouter free tier (or mocked)
 5. **Trust Battery** - Vendor risk decision engine
 6. **QuickBooks Sync** - Mocked via Mockoon
-7. **Salesforce Logging** - Mocked via Mockoon
+7. **HubSpot Logging** - Mocked via Mockoon
 8. **Audit Ledger** - Complete audit trail verification
 
 ## Files Created
@@ -21,7 +21,7 @@ This test suite validates the complete invoice processing workflow:
 invoicify/
 ├── mocks/
 │   ├── quickbooks-mock.json      # QuickBooks API mock (port 3010)
-│   ├── salesforce-mock.json      # Salesforce API mock (port 3020)
+│   ├── hubspot-mock.json      # HubSpot API mock (port 3020)
 │   ├── azure-eventgrid-mock.json # Azure Event Grid & Storage mock (port 3030)
 │   └── audit-ledger-mock.json    # Audit ledger mock (port 3050)
 ├── scripts/
@@ -102,7 +102,7 @@ python tests/e2e/generate_invoice.py --batch 10 --output-dir ./test_invoices
 | Service | Port | Description |
 |---------|------|-------------|
 | QuickBooks Mock | 3010 | QuickBooks Online API |
-| Salesforce Mock | 3020 | Salesforce REST API |
+| HubSpot Mock | 3020 | HubSpot API |
 | Azure Blob/Event Grid | 3030 | Blob storage + Event Grid |
 | Azure Document Intelligence | 3040 | OCR extraction |
 | Audit Ledger | 3050 | Audit trail service |
@@ -113,8 +113,8 @@ python tests/e2e/generate_invoice.py --batch 10 --output-dir ./test_invoices
 # Start QuickBooks mock
 mockoon-cli start --data mocks/quickbooks-mock.json --port 3010
 
-# Start Salesforce mock
-mockoon-cli start --data mocks/salesforce-mock.json --port 3020
+# Start HubSpot mock
+mockoon-cli start --data mocks/hubspot-mock.json --port 3020
 
 # Start Azure Event Grid mock
 mockoon-cli start --data mocks/azure-eventgrid-mock.json --port 3030
@@ -128,7 +128,7 @@ mockoon-cli start --data mocks/audit-ledger-mock.json --port 3050
 ```bash
 # Check all mock services
 curl http://localhost:3010/health  # QuickBooks
-curl http://localhost:3020/health  # Salesforce
+curl http://localhost:3020/health  # HubSpot
 curl http://localhost:3030/health  # Azure Event Grid
 curl http://localhost:3050/health  # Audit Ledger
 ```
@@ -169,9 +169,9 @@ curl http://localhost:3050/health  # Audit Ledger
 │     └─→ Creates bill in QuickBooks (if AUTO_APPROVE)            │
 │     └─→ Returns QuickBooks bill ID                              │
 │                                                                 │
-│  8. Salesforce Logging                                          │
+│  8. HubSpot Logging                                          │
 │     └─→ Creates ActivityLog__c record                           │
-│     └─→ Returns Salesforce activity ID                          │
+│     └─→ Returns HubSpot activity ID                          │
 │                                                                 │
 │  9. Audit Ledger Finalization                                   │
 │     └─→ Records complete audit trail                            │
@@ -204,7 +204,7 @@ STEPS:
   5. [✓] 5. LLM JSON Parsing (380ms)
   6. [✓] 6. Trust Battery Decision (15ms)
   7. [✓] 7. QuickBooks Sync (250ms)
-  8. [✓] 8. Salesforce Logging (200ms)
+  8. [✓] 8. HubSpot Logging (200ms)
   9. [✓] 9. Audit Ledger Finalization (18ms)
 --------------------------------------------------------------------------------
 INVOICE DATA:
@@ -212,7 +212,7 @@ INVOICE DATA:
   Vendor:       Acme Corporation
   Amount:       $1,620.00
 QuickBooks ID:  5678
-Salesforce ID:  a00xxABC123
+HubSpot ID:  a00xxABC123
 Audit Entries:  10
 ================================================================================
 ```
@@ -227,7 +227,7 @@ Audit Entries:  10
 ```bash
 # Mock service URLs
 export MOCKOON_QUICKBOOKS_URL=http://localhost:3010
-export MOCKOON_SALESFORCE_URL=http://localhost:3020
+export MOCKOON_HUBSPOT_URL=http://localhost:3020
 export MOCKOON_AUDIT_URL=http://localhost:3050
 export AZURE_BLOB_MOCK_URL=http://localhost:3030
 export AZURE_DI_MOCK_URL=http://localhost:3040
@@ -380,7 +380,7 @@ Expected test durations:
 | LLM Parsing | < 2s |
 | Trust Decision | < 1s |
 | QuickBooks Sync | < 2s |
-| Salesforce Log | < 2s |
+| HubSpot Log | < 2s |
 | Audit Finalization | < 1s |
 | **Total** | **< 15s** |
 

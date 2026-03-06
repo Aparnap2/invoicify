@@ -6,9 +6,9 @@ unavailable servers and logging warnings.
 
 Usage:
     from src.mcp_servers.registry import get_erp_tools
-    
+
     tools = await get_erp_tools()
-    # tools is List[BaseTool] with qb_* and sf_* tools
+    # tools is List[BaseTool] with qb_* and hs_* tools
 """
 
 import os
@@ -26,10 +26,10 @@ _cached_tools: List[BaseTool] | None = None
 
 def _has_qb_credentials() -> bool:
     """Check if QuickBooks credentials are configured.
-    
+
     Returns:
         True if all required QuickBooks OAuth credentials are present.
-    
+
     Required environment variables:
         - QB_CLIENT_ID
         - QB_CLIENT_SECRET
@@ -40,19 +40,16 @@ def _has_qb_credentials() -> bool:
     return all(os.getenv(var) for var in required)
 
 
-def _has_sf_credentials() -> bool:
-    """Check if Salesforce credentials are configured.
-    
+def _has_hs_credentials() -> bool:
+    """Check if HubSpot credentials are configured.
+
     Returns:
-        True if all required Salesforce JWT credentials are present.
-    
+        True if HubSpot Private App token is present.
+
     Required environment variables:
-        - SF_CONSUMER_KEY
-        - SF_USERNAME
-        - SF_PRIVATE_KEY_PEM
+        - HUBSPOT_API_KEY
     """
-    required = ["SF_CONSUMER_KEY", "SF_USERNAME", "SF_PRIVATE_KEY_PEM"]
-    return all(os.getenv(var) for var in required)
+    return bool(os.getenv("HUBSPOT_API_KEY"))
 
 
 async def _load_quickbooks_tools() -> List[BaseTool]:
@@ -98,62 +95,54 @@ async def _load_quickbooks_tools() -> List[BaseTool]:
         return []
 
 
-async def _load_salesforce_tools() -> List[BaseTool]:
-    """Load Salesforce MCP tools.
-    
+async def _load_hubspot_tools() -> List[BaseTool]:
+    """Load HubSpot MCP tools.
+
     Returns:
-        List of Salesforce tools (sf_create_case, sf_get_account, etc.)
+        List of HubSpot tools (hs_create_deal, hs_get_company, etc.)
         or empty list if server fails to load.
     """
     try:
         from langchain_mcp_adapters import MCPServer
-        
-        # Get the agent-core root directory
+
         agent_core_dir = Path(__file__).parent.parent.parent
-        
-        sf_server = MCPServer(
-            name="salesforce",
+
+        hs_server = MCPServer(
+            name="hubspot",
             command="uv",
-            args=["run", "python", "-m", "src.mcp_servers.salesforce_mcp"],
+            args=["run", "python", "-m", "src.mcp_servers.hubspot_mcp"],
             cwd=str(agent_core_dir),
         )
-        
-        tools = await sf_server.list_tools()
+
+        tools = await hs_server.list_tools()
         logger.info(
-            "salesforce_tools_loaded",
+            "hubspot_tools_loaded",
             tool_count=len(tools),
             tool_names=[tool.name for tool in tools],
         )
         return tools
-        
+
     except ImportError:
-        logger.warning(
-            "langchain_mcp_adapters_not_installed",
-            message="Install with: uv add langchain-mcp-adapters",
-        )
+        logger.warning("langchain_mcp_adapters_not_installed")
         return []
     except Exception as e:
-        logger.warning(
-            "salesforce_tools_load_failed",
-            error=str(e),
-            error_type=type(e).__name__,
-        )
+        logger.warning("hubspot_tools_load_failed", error=str(e))
         return []
 
 
 async def get_erp_tools() -> List[BaseTool]:
     """Load all available ERP tools from MCP servers.
-    
+
     This function:
     1. Checks for QuickBooks credentials and loads QB tools if present
-    2. Checks for Salesforce credentials and loads SF tools if present
+    2. Checks for HubSpot credentials and loads HS tools if present
     3. Merges both tool lists into a single list
     4. Gracefully degrades if credentials missing (logs warning, skips tools)
-    
+
     Returns:
-        Merged list of LangChain tools from QuickBooks and Salesforce.
+        Merged list of LangChain tools from QuickBooks and HubSpot.
         Returns empty list if no credentials are configured.
-        
+
     Example:
         >>> from src.mcp_servers.registry import get_erp_tools
         >>> tools = await get_erp_tools()
@@ -161,14 +150,14 @@ async def get_erp_tools() -> List[BaseTool]:
         Loaded 12 ERP tools
     """
     global _cached_tools
-    
+
     # Return cached tools if available
     if _cached_tools is not None:
         logger.debug("returning_cached_erp_tools", tool_count=len(_cached_tools))
         return _cached_tools
-    
+
     tools: List[BaseTool] = []
-    
+
     # Load QuickBooks tools (if credentials present)
     if _has_qb_credentials():
         logger.info("quickbooks_credentials_found", loading=True)
@@ -180,29 +169,29 @@ async def get_erp_tools() -> List[BaseTool]:
             skip=True,
             required_vars=["QB_CLIENT_ID", "QB_CLIENT_SECRET", "QB_REFRESH_TOKEN", "QB_REALM_ID"],
         )
-    
-    # Load Salesforce tools (if credentials present)
-    if _has_sf_credentials():
-        logger.info("salesforce_credentials_found", loading=True)
-        sf_tools = await _load_salesforce_tools()
-        tools.extend(sf_tools)
+
+    # Load HubSpot tools (if credentials present)
+    if _has_hs_credentials():
+        logger.info("hubspot_credentials_found", loading=True)
+        hs_tools = await _load_hubspot_tools()
+        tools.extend(hs_tools)
     else:
         logger.warning(
-            "salesforce_credentials_missing",
+            "hubspot_credentials_missing",
             skip=True,
-            required_vars=["SF_CONSUMER_KEY", "SF_USERNAME", "SF_PRIVATE_KEY_PEM"],
+            required_vars=["HUBSPOT_API_KEY"],
         )
-    
+
     # Cache the loaded tools
     _cached_tools = tools
-    
+
     logger.info(
         "erp_tools_loaded_complete",
         total_count=len(tools),
         quickbooks_count=len([t for t in tools if t.name.startswith("qb_")]),
-        salesforce_count=len([t for t in tools if t.name.startswith("sf_")]),
+        hubspot_count=len([t for t in tools if t.name.startswith("hs_")]),
     )
-    
+
     return tools
 
 

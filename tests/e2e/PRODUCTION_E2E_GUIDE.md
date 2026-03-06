@@ -6,7 +6,7 @@ This test validates the **complete Invoicify workflow** with **REAL Azure servic
 
 ```
 PDF Upload → Azure Blob → Sarvam OCR → Azure LLM → Trust Battery → 
-QuickBooks (Mock) → Salesforce (Mock) → Audit Trail → Qdrant Vector
+QuickBooks (Mock) → HubSpot (Mock) → Audit Trail → Qdrant Vector
 ```
 
 ---
@@ -87,7 +87,7 @@ PYTHONPATH=. uv run pytest tests/e2e/test_production_e2e.py -v --tb=short
 | 5 | Redis | **REAL** | Check Trust Battery level |
 | 6 | Local Logic | Local | Make approval decision |
 | 7 | QuickBooks | Mock (port 3010) | Create bill (if approved) |
-| 8 | Salesforce | Mock (port 3020) | Log activity |
+| 8 | HubSpot | Mock (port 3020) | Log activity |
 | 9 | PostgreSQL | Local | Store audit trail |
 | 10 | Qdrant + Azure | **REAL** | Embed + store vector |
 
@@ -107,8 +107,8 @@ PYTHONPATH=. uv run pytest tests/e2e/test_production_e2e.py -v --tb=short
 
 Starting QuickBooks mock on port 3010...
 ✓ QuickBooks mock started (PID: 12345)
-Starting Salesforce mock on port 3020...
-✓ Salesforce mock started (PID: 12346)
+Starting HubSpot mock on port 3020...
+✓ HubSpot mock started (PID: 12346)
 
 ✓ Generate Test Invoice PDF: PASS
     path: /path/to/invoice.pdf
@@ -146,7 +146,7 @@ Starting Salesforce mock on port 3020...
     total: 11800.0
     status: created
 
-✓ Log to Mock Salesforce: PASS
+✓ Log to Mock HubSpot: PASS
     record_id: a00XXXXXXXXXXXXXXX
     decision: AUTO_APPROVE
     status: logged
@@ -169,7 +169,7 @@ Steps Passed: 10/10 (100.0%)
 Duration: 45.3s
 Decision: AUTO_APPROVE
 QuickBooks ID: 5678
-Salesforce ID: a00XXXXXXXXXXXXXXX
+HubSpot ID: a00XXXXXXXXXXXXXXX
 Report: reports/e2e/production-e2e-summary.json
 ============================================================
 
@@ -255,7 +255,7 @@ def test_11_your_new_step(self):
 
 Edit mock JSON files:
 - `mocks/quickbooks-prod-mock.json`: Change `"port": 3010`
-- `mocks/salesforce-prod-mock.json`: Change `"port": 3020`
+- `mocks/hubspot-prod-mock.json`: Change `"port": 3020`
 
 Update `Config` class in test file accordingly.
 
@@ -293,7 +293,7 @@ cat reports/e2e/production-e2e-results.xml
 | Azure OCR | < 30s | ~15s |
 | Azure LLM | < 10s | ~3s |
 | QuickBooks Mock | < 1s | ~150ms |
-| Salesforce Mock | < 1s | ~150ms |
+| HubSpot Mock | < 1s | ~150ms |
 
 ---
 
@@ -304,7 +304,7 @@ After passing this test:
 1. ✅ Review reports in `reports/e2e/`
 2. ✅ Verify all 10 steps passed
 3. ✅ Check QuickBooks mock received bill
-4. ✅ Check Salesforce mock received log
+4. ✅ Check HubSpot mock received log
 5. ✅ Verify Qdrant has vector (use Qdrant dashboard)
 6. ✅ Ready for production deployment!
 

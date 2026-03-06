@@ -49,7 +49,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 import structlog
-from mcp.server import Server
+from mcp.server import FastMCP
 from pydantic import BaseModel, Field, field_validator
 from tenacity import (
     retry,
@@ -507,7 +507,7 @@ class QuickBooksMCPServer:
 
     def __init__(self):
         """Initialize QuickBooks MCP Server."""
-        self.server = Server("quickbooks")
+        self.server = FastMCP("quickbooks")
         self._trace_id: str = str(uuid.uuid4())
 
         # Load configuration
@@ -1258,6 +1258,10 @@ Environment Variables:
     )
 
     args = parser.parse_args()
+
+    # Load .env file explicitly (for smoke tests)
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
     # Configure structured logging
     structlog.configure(

@@ -4,6 +4,7 @@ Azure-native configuration. Uses Postgres, Azure Storage, Azure DI.
 Environment variables map 1:1 to Azure Container Apps secrets.
 
 Voice agent (Sarvam STT) and Edge API (Cloudflare Worker) removed.
+CRM integration: HubSpot (replaces Salesforce).
 """
 
 from functools import lru_cache
@@ -175,28 +176,15 @@ Extraction backend selection:
         description="Use QuickBooks sandbox environment (true) or production (false)",
     )
 
-    # ── Salesforce ────────────────────────────────────────────────────────────
-    # JWT Bearer Flow credentials for Salesforce API access
-    # Create Connected App: Setup → App Manager → New Connected App
-    salesforce_consumer_key: Optional[str] = Field(
+    # ── HubSpot CRM ───────────────────────────────────────────────────────────
+    # Private App token authentication (no OAuth, no JWT, token never expires)
+    # Setup: app.hubspot.com → Settings → Integrations → Private Apps
+    # 1. Create private app with scopes: crm.objects.deals.*, crm.objects.companies.*
+    # 2. Copy token (starts with pat-na1-...)
+    # 3. Set HUBSPOT_API_KEY env var
+    hubspot_api_key: Optional[str] = Field(
         default=None,
-        description="Salesforce Connected App Consumer Key",
-    )
-    salesforce_username: Optional[str] = Field(
-        default=None,
-        description="Salesforce username (must be pre-authorized in Connected App)",
-    )
-    salesforce_private_key_pem: Optional[str] = Field(
-        default=None,
-        description="Path to RSA private key PEM file or PEM content string",
-    )
-    salesforce_instance_url: Optional[str] = Field(
-        default=None,
-        description="Salesforce instance URL (e.g., https://yourorg.my.salesforce.com)",
-    )
-    salesforce_sandbox: bool = Field(
-        default=True,
-        description="Use Salesforce sandbox (test.salesforce.com) or production",
+        description="HubSpot Private App API token (never expires)",
     )
 
     @field_validator("log_level")
