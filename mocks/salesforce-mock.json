@@ -1,0 +1,113 @@
+{
+  "uuid": "salesforce-mock-v1",
+  "name": "Salesforce API Mock",
+  "endpointPrefix": "",
+  "port": 3020,
+  "hostname": "0.0.0.0",
+  "https": false,
+  "cors": true,
+  "headers": [{"key": "Content-Type", "value": "application/json"}],
+  "proxyMode": false,
+  "routes": [
+    {
+      "uuid": "sf-oauth-token",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/services/oauth2/token",
+      "documentation": "OAuth 2.0 token endpoint",
+      "responses": [{
+        "uuid": "sf-oauth-success",
+        "label": "OAuth Success",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"access_token\": \"mock_sf_token_{{faker 'string.alphanumeric' 64}}\", \"instance_url\": \"https://mock.my.salesforce.com\", \"id\": \"https://test.salesforce.com/id/00Dxx/005xx\", \"token_type\": \"Bearer\", \"issued_at\": \"{{now 'x'}}\"}",
+        "latency": 200,
+        "statusCode": 200
+      }]
+    },
+    {
+      "uuid": "sf-create-activity",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/services/data/v58.0/sobjects/ActivityLog__c",
+      "documentation": "Create Activity Log for Invoicify audit trail",
+      "responses": [{
+        "uuid": "sf-activity-success",
+        "label": "Activity Created",
+        "headers": [
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "X-Invoicify-Trace-Id", "value": "{{header 'X-Invoicify-Trace-Id'}}"}
+        ],
+        "body": "{\"id\": \"a00xx{{faker 'string.alphanumeric' 12}}\", \"success\": true, \"errors\": []}",
+        "latency": 200,
+        "statusCode": 201,
+        "callbacks": [{
+          "uuid": "sf-activity-callback",
+          "uri": "http://localhost:3050/audit/salesforce/activity-created",
+          "method": "POST",
+          "body": "{\"event\": \"activity_log_created\", \"activity_id\": \"a00xx{{faker 'string.alphanumeric' 12}}\", \"trace_id\": \"{{header 'X-Invoicify-Trace-Id'}}\", \"invoice_id\": \"{{body 'Invoice_ID__c'}}\", \"timestamp\": \"{{now}}\"}"
+        }]
+      }]
+    },
+    {
+      "uuid": "sf-query-activity",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/services/data/v58.0/query",
+      "documentation": "SOQL query for Activity Logs",
+      "rules": [{"target": "query", "modifier": "ActivityLog__c", "value": "ActivityLog__c", "operator": "contains"}],
+      "responses": [{
+        "uuid": "sf-query-success",
+        "label": "Query Success",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"totalSize\": 1, \"done\": true, \"records\": [{\"Id\": \"a00xxABC\", \"Invoice_ID__c\": \"INV-2025-001\", \"Trace_ID__c\": \"trace-123\", \"Action_Type__c\": \"AUTO_APPROVE\", \"QuickBooks_Bill_ID__c\": \"1234\", \"Processing_Status__c\": \"COMPLETED\"}]}",
+        "latency": 150,
+        "statusCode": 200
+      }]
+    },
+    {
+      "uuid": "sf-get-activity",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/services/data/v58.0/sobjects/ActivityLog__c/:id",
+      "documentation": "Get Activity Log by ID",
+      "responses": [{
+        "uuid": "sf-get-success",
+        "label": "Get Success",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"Id\": \"{{url 'id'}}\", \"Invoice_ID__c\": \"INV-2025-001\", \"Trace_ID__c\": \"trace-123\", \"Action_Type__c\": \"AUTO_APPROVE\", \"QuickBooks_Bill_ID__c\": \"1234\", \"Processing_Status__c\": \"COMPLETED\", \"Notes__c\": \"Automated processing via Invoicify\"}",
+        "latency": 100,
+        "statusCode": 200
+      }]
+    },
+    {
+      "uuid": "sf-create-invoice",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/services/data/v58.0/sobjects/Invoice__c",
+      "documentation": "Create Invoice record",
+      "responses": [{
+        "uuid": "sf-invoice-success",
+        "label": "Invoice Created",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"id\": \"a01xx{{faker 'string.alphanumeric' 12}}\", \"success\": true, \"errors\": []}",
+        "latency": 200,
+        "statusCode": 201
+      }]
+    },
+    {
+      "uuid": "sf-health",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/health",
+      "documentation": "Health check",
+      "responses": [{
+        "uuid": "sf-health-ok",
+        "label": "Healthy",
+        "headers": [{"key": "Content-Type", "value": "application/json"}],
+        "body": "{\"status\": \"healthy\", \"service\": \"salesforce-mock\", \"port\": 3020, \"timestamp\": \"{{now}}\"}",
+        "latency": 10,
+        "statusCode": 200
+      }]
+    }
+  ]
+}

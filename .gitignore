@@ -16,6 +16,7 @@ bundle/
 # ── Environment & Secrets ───────────────────────────────────────────────────
 .env*
 !.env.example
+!.env.azure.example
 .dev.vars
 .vars
 .env.local
@@ -30,6 +31,8 @@ secrets/
 *.credentials
 *credentials.json
 *service-account.json
+# QuickBooks MCP token storage
+apps/agent-core/.secrets/
 
 # ── Build Artifacts ─────────────────────────────────────────────────────────
 .next/

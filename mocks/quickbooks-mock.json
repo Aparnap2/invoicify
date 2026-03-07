@@ -1,0 +1,439 @@
+{
+  "uuid": "quickbooks-mock-v1",
+  "name": "QuickBooks Online API Mock",
+  "endpointPrefix": "",
+  "port": 3010,
+  "hostname": "0.0.0.0",
+  "https": false,
+  "cors": true,
+  "headers": [
+    {
+      "key": "Content-Type",
+      "value": "application/json"
+    }
+  ],
+  "proxyMode": false,
+  "routes": [
+    {
+      "uuid": "qb-oauth-token",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/oauth2/token",
+      "documentation": "OAuth 2.0 token endpoint",
+      "responses": [
+        {
+          "uuid": "qb-oauth-success",
+          "label": "OAuth Success",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"token_type\": \"Bearer\",\n  \"access_token\": \"mock_qbo_access_token_{{faker 'string.alphanumeric' 64}}\",\n  \"refresh_token\": \"mock_qbo_refresh_token_{{faker 'string.alphanumeric' 64}}\",\n  \"expires_in\": 3600,\n  \"x_refresh_token_expires_in\": 8726400,\n  \"realmId\": \"913035307946357\"\n}",
+          "latency": 150,
+          "statusCode": 200,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-refresh-token",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/oauth2/refresh",
+      "documentation": "Refresh OAuth token",
+      "responses": [
+        {
+          "uuid": "qb-refresh-success",
+          "label": "Refresh Success",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"token_type\": \"Bearer\",\n  \"access_token\": \"mock_qbo_access_token_{{faker 'string.alphanumeric' 64}}\",\n  \"refresh_token\": \"mock_qbo_refresh_token_{{faker 'string.alphanumeric' 64}}\",\n  \"expires_in\": 3600,\n  \"x_refresh_token_expires_in\": 8726400,\n  \"realmId\": \"913035307946357\"\n}",
+          "latency": 100,
+          "statusCode": 200,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-get-company-info",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/v3/company/:realmId/companyinfo/:id",
+      "documentation": "Get company information",
+      "responses": [
+        {
+          "uuid": "qb-company-success",
+          "label": "Company Info Success",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"CompanyInfo\": {\n    \"Name\": \"Test Company Inc.\",\n    \"CompanyAddr\": {\n      \"Line1\": \"123 Test Street\",\n      \"City\": \"San Francisco\",\n      \"CountrySubDivisionCode\": \"CA\",\n      \"PostalCode\": \"94105\"\n    },\n    \"CustomerCommunicationAddr\": {\n      \"Line1\": \"123 Test Street\",\n      \"City\": \"San Francisco\",\n      \"CountrySubDivisionCode\": \"CA\",\n      \"PostalCode\": \"94105\"\n    },\n    \"LegalAddr\": {\n      \"Line1\": \"123 Test Street\",\n      \"City\": \"San Francisco\",\n      \"CountrySubDivisionCode\": \"CA\",\n      \"PostalCode\": \"94105\"\n    },\n    \"SupportedLanguages\": \"en\",\n    \"Country\": \"US\",\n    \"Email\": {\n      \"Address\": \"accounting@testcompany.com\"\n    },\n    \"WebAddr\": {\n      \"URI\": \"www.testcompany.com\"\n    },\n    \"FiscalYearStartMonth\": \"January\",\n    \"TaxYearMonth\": \"January\",\n    \"Id\": \"1\",\n    \"SyncToken\": \"0\",\n    \"domain\": \"QBO\",\n    \"sparse\": false,\n    \"MetaData\": {\n      \"CreateTime\": \"2024-01-01T00:00:00-08:00\",\n      \"LastUpdatedTime\": \"2024-01-01T00:00:00-08:00\"\n    }\n  },\n  \"time\": \"{{now}}\"\n}",
+          "latency": 100,
+          "statusCode": 200,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-create-vendor",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/v3/company/:realmId/vendor",
+      "documentation": "Create a new vendor",
+      "responses": [
+        {
+          "uuid": "qb-vendor-create-success",
+          "label": "Vendor Created",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"Vendor\": {\n    \"Name\": \"{{body 'Name'}}\",\n    \"CompanyName\": \"{{body 'CompanyName'}}\",\n    \"Active\": true,\n    \"Vendor1099\": false,\n    \"BillAddr\": {\n      \"Line1\": \"{{body 'BillAddr.Line1'}}\",\n      \"City\": \"{{body 'BillAddr.City'}}\",\n      \"CountrySubDivisionCode\": \"{{body 'BillAddr.CountrySubDivisionCode'}}\",\n      \"PostalCode\": \"{{body 'BillAddr.PostalCode'}}\"\n    },\n    \"Id\": \"{{faker 'number.int' 100 999}}\",\n    \"SyncToken\": \"0\",\n    \"domain\": \"QBO\",\n    \"sparse\": false,\n    \"MetaData\": {\n      \"CreateTime\": \"{{now}}\",\n      \"LastUpdatedTime\": \"{{now}}\"\n    }\n  },\n  \"time\": \"{{now}}\"\n}",
+          "latency": 200,
+          "statusCode": 200,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": [
+            {
+              "uuid": "qb-vendor-callback",
+              "uri": "http://localhost:3050/audit/quickbooks/vendor-created",
+              "method": "POST",
+              "body": "{\n  \"event\": \"vendor_created\",\n  \"vendor_id\": \"{{body 'Vendor.Id'}}\",\n  \"vendor_name\": \"{{body 'Name'}}\",\n  \"timestamp\": \"{{now}}\"\n}"
+            }
+          ]
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-query-vendor",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/v3/company/:realmId/query",
+      "documentation": "Query vendors (QLike)",
+      "rules": [
+        {
+          "target": "query",
+          "modifier": "Vendor",
+          "value": "Vendor",
+          "operator": "equals",
+          "invert": false
+        }
+      ],
+      "responses": [
+        {
+          "uuid": "qb-vendor-query-success",
+          "label": "Vendor Query Success",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"QueryResponse\": {\n    \"Vendor\": [\n      {\n        \"Name\": \"Acme Corporation\",\n        \"CompanyName\": \"Acme Corporation\",\n        \"Active\": true,\n        \"Id\": \"56\",\n        \"SyncToken\": \"0\",\n        \"domain\": \"QBO\",\n        \"sparse\": false,\n        \"MetaData\": {\n          \"CreateTime\": \"2024-01-01T00:00:00-08:00\",\n          \"LastUpdatedTime\": \"2024-01-01T00:00:00-08:00\"\n        }\n      }\n    ],\n    \"startPosition\": 1,\n    \"maxResults\": 1,\n    \"totalCount\": 1\n  },\n  \"time\": \"{{now}}\"\n}",
+          "latency": 150,
+          "statusCode": 200,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-create-bill",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/v3/company/:realmId/bill",
+      "documentation": "Create a new bill (accounts payable)",
+      "responses": [
+        {
+          "uuid": "qb-bill-create-success",
+          "label": "Bill Created Successfully",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "key": "X-Invoicify-Trace-Id",
+              "value": "{{header 'X-Invoicify-Trace-Id'}}"
+            }
+          ],
+          "body": "{\n  \"Bill\": {\n    \"VendorRef\": {\n      \"value\": \"{{body 'VendorRef.value'}}\",\n      \"name\": \"{{body 'VendorRef.name'}}\"\n    },\n    \"TxnDate\": \"{{body 'TxnDate'}}\",\n    \"DueDate\": \"{{body 'DueDate'}}\",\n    \"DocNumber\": \"{{body 'DocNumber'}}\",\n    \"PrivateNote\": \"{{body 'PrivateNote'}}\",\n    \"Line\": {{body 'Line'}},\n    \"TotalAmt\": {{body 'TotalAmt'}},\n    \"Balance\": {{body 'TotalAmt'}},\n    \"Id\": \"{{faker 'number.int' 1000 9999}}\",\n    \"SyncToken\": \"0\",\n    \"domain\": \"QBO\",\n    \"sparse\": false,\n    \"MetaData\": {\n      \"CreateTime\": \"{{now}}\",\n      \"LastUpdatedTime\": \"{{now}}\"\n    }\n  },\n  \"time\": \"{{now}}\"\n}",
+          "latency": 250,
+          "statusCode": 200,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": [
+            {
+              "uuid": "qb-bill-callback",
+              "uri": "http://localhost:3050/audit/quickbooks/bill-created",
+              "method": "POST",
+              "body": "{\n  \"event\": \"bill_created\",\n  \"bill_id\": \"{{body 'Bill.Id'}}\",\n  \"vendor_ref\": \"{{body 'VendorRef.name'}}\",\n  \"total_amount\": {{body 'TotalAmt'}},\n  \"doc_number\": \"{{body 'DocNumber'}}\",\n  \"trace_id\": \"{{header 'X-Invoicify-Trace-Id'}}\",\n  \"timestamp\": \"{{now}}\"\n}"
+            }
+          ]
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-query-bill",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/v3/company/:realmId/query",
+      "documentation": "Query bills",
+      "rules": [
+        {
+          "target": "query",
+          "modifier": "Bill",
+          "value": "Bill",
+          "operator": "equals",
+          "invert": false
+        }
+      ],
+      "responses": [
+        {
+          "uuid": "qb-bill-query-success",
+          "label": "Bill Query Success",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"QueryResponse\": {\n    \"Bill\": [\n      {\n        \"VendorRef\": {\n          \"value\": \"56\",\n          \"name\": \"Acme Corporation\"\n        },\n        \"DocNumber\": \"INV-2025-001\",\n        \"TotalAmt\": 500.00,\n        \"Balance\": 500.00,\n        \"Id\": \"1234\",\n        \"SyncToken\": \"0\",\n        \"domain\": \"QBO\",\n        \"sparse\": false,\n        \"MetaData\": {\n          \"CreateTime\": \"2025-01-01T00:00:00-08:00\",\n          \"LastUpdatedTime\": \"2025-01-01T00:00:00-08:00\"\n        }\n      }\n    ],\n    \"startPosition\": 1,\n    \"maxResults\": 1,\n    \"totalCount\": 1\n  },\n  \"time\": \"{{now}}\"\n}",
+          "latency": 150,
+          "statusCode": 200,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-get-bill",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/v3/company/:realmId/bill/:id",
+      "documentation": "Get a specific bill by ID",
+      "responses": [
+        {
+          "uuid": "qb-bill-get-success",
+          "label": "Get Bill Success",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"Bill\": {\n    \"VendorRef\": {\n      \"value\": \"56\",\n      \"name\": \"Acme Corporation\"\n    },\n    \"TxnDate\": \"2025-01-01\",\n    \"DueDate\": \"2025-02-01\",\n    \"DocNumber\": \"INV-2025-001\",\n    \"PrivateNote\": \"Invoice processed by Invoicify\",\n    \"Line\": [\n      {\n        \"Id\": \"1\",\n        \"LineNum\": 1,\n        \"Description\": \"Professional Services\",\n        \"Amount\": 500.00,\n        \"DetailType\": \"AccountBasedExpenseLineDetail\",\n        \"AccountBasedExpenseLineDetail\": {\n          \"AccountRef\": {\n            \"value\": \"60\",\n            \"name\": \"Professional Fees\"\n          },\n          \"BillableStatus\": \"NotBillable\",\n          \"TaxCodeRef\": {\n            \"value\": \"NON\"\n          }\n        }\n      }\n    ],\n    \"TotalAmt\": 500.00,\n    \"Balance\": 500.00,\n    \"Id\": \"{{url 'id'}}\",\n    \"SyncToken\": \"0\",\n    \"domain\": \"QBO\",\n    \"sparse\": false,\n    \"MetaData\": {\n      \"CreateTime\": \"2025-01-01T00:00:00-08:00\",\n      \"LastUpdatedTime\": \"2025-01-01T00:00:00-08:00\"\n    }\n  },\n  \"time\": \"{{now}}\"\n}",
+          "latency": 100,
+          "statusCode": 200,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-update-bill",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/v3/company/:realmId/bill/:id",
+      "documentation": "Update an existing bill",
+      "responses": [
+        {
+          "uuid": "qb-bill-update-success",
+          "label": "Bill Updated Successfully",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"Bill\": {\n    \"VendorRef\": {\n      \"value\": \"{{body 'VendorRef.value'}}\",\n      \"name\": \"{{body 'VendorRef.name'}}\"\n    },\n    \"TxnDate\": \"{{body 'TxnDate'}}\",\n    \"DueDate\": \"{{body 'DueDate'}}\",\n    \"DocNumber\": \"{{body 'DocNumber'}}\",\n    \"Line\": {{body 'Line'}},\n    \"TotalAmt\": {{body 'TotalAmt'}},\n    \"Balance\": {{body 'Balance'}},\n    \"Id\": \"{{url 'id'}}\",\n    \"SyncToken\": \"1\",\n    \"domain\": \"QBO\",\n    \"sparse\": false,\n    \"MetaData\": {\n      \"CreateTime\": \"2025-01-01T00:00:00-08:00\",\n      \"LastUpdatedTime\": \"{{now}}\"\n    }\n  },\n  \"time\": \"{{now}}\"\n}",
+          "latency": 200,
+          "statusCode": 200,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-void-bill",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/v3/company/:realmId/bill/:id/void",
+      "documentation": "Void a bill",
+      "responses": [
+        {
+          "uuid": "qb-bill-void-success",
+          "label": "Bill Voided Successfully",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"Bill\": {\n    \"VendorRef\": {\n      \"value\": \"56\",\n      \"name\": \"Acme Corporation\"\n    },\n    \"DocNumber\": \"INV-2025-001\",\n    \"PrivateNote\": \"VOIDED\",\n    \"TotalAmt\": 0.00,\n    \"Balance\": 0.00,\n    \"Id\": \"{{url 'id'}}\",\n    \"SyncToken\": \"1\",\n    \"domain\": \"QBO\",\n    \"sparse\": false,\n    \"MetaData\": {\n      \"CreateTime\": \"2025-01-01T00:00:00-08:00\",\n      \"LastUpdatedTime\": \"{{now}}\"\n    }\n  },\n  \"time\": \"{{now}}\"\n}",
+          "latency": 150,
+          "statusCode": 200,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-create-account",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/v3/company/:realmId/account",
+      "documentation": "Create a new account",
+      "responses": [
+        {
+          "uuid": "qb-account-create-success",
+          "label": "Account Created",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"Account\": {\n    \"Name\": \"{{body 'Name'}}\",\n    \"AccountType\": \"{{body 'AccountType'}}\",\n    \"AccountSubType\": \"{{body 'AccountSubType'}}\",\n    \"Classification\": \"{{body 'Classification'}}\",\n    \"Active\": true,\n    \"Id\": \"{{faker 'number.int' 100 999}}\",\n    \"SyncToken\": \"0\",\n    \"domain\": \"QBO\",\n    \"sparse\": false,\n    \"MetaData\": {\n      \"CreateTime\": \"{{now}}\",\n      \"LastUpdatedTime\": \"{{now}}\"\n    }\n  },\n  \"time\": \"{{now}}\"\n}",
+          "latency": 150,
+          "statusCode": 200,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-health",
+      "type": "http",
+      "method": "get",
+      "endpoint": "/health",
+      "documentation": "Health check endpoint",
+      "responses": [
+        {
+          "uuid": "qb-health-success",
+          "label": "QuickBooks Mock Healthy",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"status\": \"healthy\",\n  \"service\": \"quickbooks-mock\",\n  \"port\": 3010,\n  \"timestamp\": \"{{now}}\",\n  \"version\": \"1.0.0\"\n}",
+          "latency": 10,
+          "statusCode": 200,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-error-401",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/v3/company/:realmId/bill",
+      "documentation": "Simulate 401 Unauthorized error",
+      "rules": [
+        {
+          "target": "header",
+          "modifier": "Authorization",
+          "value": "Bearer invalid",
+          "operator": "equals",
+          "invert": false
+        }
+      ],
+      "responses": [
+        {
+          "uuid": "qb-401-error",
+          "label": "401 Unauthorized",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"fault\": {\n    \"type\": \"AUTHENTICATION\",\n    \"error\": [\n      {\n        \"code\": \"401\",\n        \"message\": \"Authentication failed. Invalid access token.\",\n        \"Detail\": \"The access token provided is invalid or expired.\"\n      }\n    ]\n  }\n}",
+          "latency": 50,
+          "statusCode": 401,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    },
+    {
+      "uuid": "qb-error-400",
+      "type": "http",
+      "method": "post",
+      "endpoint": "/v3/company/:realmId/bill",
+      "documentation": "Simulate 400 Bad Request error",
+      "rules": [
+        {
+          "target": "body",
+          "modifier": "TotalAmt",
+          "value": "-1",
+          "operator": "equals",
+          "invert": false
+        }
+      ],
+      "responses": [
+        {
+          "uuid": "qb-400-error",
+          "label": "400 Bad Request",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"fault\": {\n    \"type\": \"VALIDATION\",\n    \"error\": [\n      {\n        \"code\": \"400\",\n        \"message\": \"Validation error\",\n        \"Detail\": \"TotalAmt must be a positive number.\"\n      }\n    ]\n  }\n}",
+          "latency": 50,
+          "statusCode": 400,
+          "bodyType": "INLINE",
+          "crudKey": "id",
+          "callbacks": []
+        }
+      ],
+      "responseMode": null
+    }
+  ],
+  "proxyReqHeaders": [],
+  "proxyResHeaders": [],
+  "tlsOptions": {}
+}

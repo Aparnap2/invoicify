@@ -8,7 +8,8 @@ import json
 from typing import Dict, Any, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from src.utils.edge_callback import update_invoice_status
+from src.db.status import update_invoice_status
+from src.queue.azure_queue import AzureQueueConsumer
 
 # Configure Structured Logging
 structlog.configure(
@@ -19,6 +20,31 @@ structlog.configure(
 logger = structlog.get_logger()
 
 app = FastAPI(title="Invoicify Agent Core")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Queue Consumer Lifecycle
+# ─────────────────────────────────────────────────────────────────────────────
+
+_queue_consumer: Optional[AzureQueueConsumer] = None
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start Azure Storage Queue consumer on app startup."""
+    global _queue_consumer
+    _queue_consumer = AzureQueueConsumer(pipeline_fn=run_pipeline)
+    # Run as background task — doesn't block FastAPI
+    asyncio.create_task(_queue_consumer.start())
+    logger.info("queue_consumer_started")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Graceful shutdown of queue consumer."""
+    global _queue_consumer
+    if _queue_consumer:
+        await _queue_consumer.stop()
+    logger.info("queue_consumer_stopped")
 
 # --- Models ---
 

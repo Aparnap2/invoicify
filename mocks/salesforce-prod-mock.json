@@ -1,0 +1,101 @@
+{
+  "uuid": "salesforce-prod-mock-2026",
+  "lastMigration": 29,
+  "name": "Salesforce REST API Mock",
+  "endpointPrefix": "services/data/v58.0",
+  "latency": 100,
+  "port": 3020,
+  "hostname": "",
+  "folders": [
+    {
+      "uuid": "activity-log-folder",
+      "name": "ActivityLog__c"
+    }
+  ],
+  "routes": [
+    {
+      "uuid": "create-activity-log",
+      "type": "http",
+      "method": "post",
+      "endpoint": "sobjects/ActivityLog__c",
+      "responses": [
+        {
+          "latency": 150,
+          "statusCode": 201,
+          "label": "Activity Log Created",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"id\": \"a00{{faker 'datatype.string' length=15}}\",\n  \"success\": true,\n  \"errors\": []\n}"
+        }
+      ]
+    },
+    {
+      "uuid": "query-activity-logs",
+      "type": "http",
+      "method": "get",
+      "endpoint": "query/",
+      "responses": [
+        {
+          "latency": 120,
+          "statusCode": 200,
+          "label": "Query Activity Logs",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"totalSize\": 1,\n  \"done\": true,\n  \"records\": [\n    {\n      \"attributes\": {\n        \"type\": \"ActivityLog__c\",\n        \"url\": \"/services/data/v58.0/sobjects/ActivityLog__c/a00XXXXXXXXXXXXXXX\"\n      },\n      \"Id\": \"a00{{faker 'datatype.string' length=15}}\",\n      \"Invoice_Number__c\": \"INV-{{faker 'datatype.number' min=1000 max=9999}}\",\n      \"Amount__c\": {{faker 'datatype.number' min=1000 max=10000}},\n      \"Decision__c\": \"AUTO_APPROVE\"\n    }\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "uuid": "oauth-token",
+      "type": "http",
+      "method": "post",
+      "endpoint": "oauth2/token",
+      "responses": [
+        {
+          "latency": 100,
+          "statusCode": 200,
+          "label": "OAuth Token",
+          "headers": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"access_token\": \"mock-access-token-{{faker 'datatype.string' length=32}}\",\n  \"signature\": \"{{faker 'datatype.string' length=64}}\",\n  \"scope\": \"api\",\n  \"instance_url\": \"https://test.salesforce.com\",\n  \"id\": \"https://test.salesforce.com/id/00DXXXXXXXXXXXXXXX/005XXXXXXXXXXXXXXX\",\n  \"token_type\": \"Bearer\",\n  \"issued_at\": \"{{now}}\"\n}"
+        }
+      ]
+    }
+  ],
+  "proxyMode": false,
+  "proxyHost": "",
+  "proxyRemovePrefix": false,
+  "tlsOptions": {
+    "enabled": false
+  },
+  "cors": true,
+  "headers": [
+    {
+      "key": "Access-Control-Allow-Origin",
+      "value": "*"
+    },
+    {
+      "key": "Access-Control-Allow-Methods",
+      "value": "GET,POST,PUT,DELETE,OPTIONS"
+    },
+    {
+      "key": "Access-Control-Allow-Headers",
+      "value": "Content-Type,Authorization"
+    }
+  ],
+  "proxyReqHeaders": [],
+  "proxyResHeaders": [],
+  "responseMode": null
+}
