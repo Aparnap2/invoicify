@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from pydantic import Field, field_validator
+from pydantic.networks import PostgresDsn
 from pydantic_settings import BaseSettings
 
 
@@ -104,12 +105,12 @@ Extraction backend selection:
 
     # ── PostgreSQL (Azure Flexible Server) ───────────────────────────────────
     # Burstable B1MS: ~$0 for 12 months with free credits.
-    database_url: str = Field(
+    database_url: PostgresDsn = Field(
         default="postgresql://invoicify:password@localhost:5432/invoicify",
         description="PostgreSQL connection URL.",
     )
     # LangGraph state persistence uses the same Postgres instance.
-    checkpointer_url: str = Field(
+    checkpointer_url: PostgresDsn = Field(
         default="postgresql://invoicify:password@localhost:5432/invoicify",
         description="Postgres URL for LangGraph checkpointer.",
     )
@@ -174,6 +175,13 @@ Extraction backend selection:
     quickbooks_sandbox: bool = Field(
         default=True,
         description="Use QuickBooks sandbox environment (true) or production (false)",
+    )
+
+    # ── Redis (Azure Cache for Redis) ─────────────────────────────────────────
+    # Used for OAuth token store in stateless containerized environments
+    redis_url: Optional[str] = Field(
+        default=None,
+        description="Redis URL for token store (Azure Cache for Redis)",
     )
 
     # ── HubSpot CRM ───────────────────────────────────────────────────────────

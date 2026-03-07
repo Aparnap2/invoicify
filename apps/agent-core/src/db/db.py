@@ -39,19 +39,7 @@ async def get_pool() -> asyncpg.Pool:
     if _pool is None:
         settings = get_settings()
         _pool = await asyncpg.create_pool(
-            host=settings.database_url.split("@")[1].split(":")[0]
-            if "@" in settings.database_url
-            else "localhost",
-            port=5432,
-            user=settings.database_url.split(":")[1].replace("//", "")
-            if "//" in settings.database_url
-            else "invoicify",
-            password=settings.database_url.split(":")[2].split("@")[0]
-            if "@" in settings.database_url
-            else "password",
-            database=settings.database_url.split("/")[-1]
-            if "/" in settings.database_url
-            else "invoicify",
+            dsn=str(settings.database_url),
             min_size=2,
             max_size=10,
         )
@@ -445,6 +433,40 @@ async def get_audit_logs(trace_id: str) -> list[dict[str, Any]]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Duplicate Detection Helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+async def check_invoice_duplicate(content_hash: str) -> tuple[bool, Optional[UUID]]:
+    """
+    Check if invoice with same content hash exists.
+    
+    Args:
+        content_hash: SHA256 hash of invoice content
+        
+    Returns:
+        Tuple of (exists, invoice_id)
+    """
+    async with get_connection() as conn:
+        row = await conn.fetchrow(
+            "SELECT id FROM invoices WHERE content_hash = $1",
+            content_hash,
+        )
+        return (row is not None, row["id"] if row else None)
+
+
+async def store_invoice_hash(trace_id: str, content_hash: str) -> None:
+    """
+    Store invoice content hash.
+    
+    Args:
+        trace_id: Unique trace ID for the invoice
+        content_hash: SHA256 hash of invoice content
+    """
+    async with get_connection() as conn:
+        await conn.execute(
+            "UPDATE invoices SET content_hash = $1 WHERE trace_id = $2",
+            content_hash,
+            trace_id,
+        )
 
 
 async def find_potential_duplicates(

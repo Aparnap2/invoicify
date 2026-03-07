@@ -1,7 +1,7 @@
 # INVOICIFY — Azure-Native AP Automation with MCP
 
 [![Tests](https://img.shields.io/badge/tests-83%20passing-brightgreen)](https://github.com/Aparnap2/invoicify)
-[![Branch](https://img.shields.io/badge/branch-feat/azure--native--migration-blue)](https://github.com/Aparnap2/invoicify/tree/feat/azure-native-migration)
+[![Branch](https://img.shields.io/badge/branch-feat/azure-native-migration-blue)](https://github.com/Aparnap2/invoicify/tree/feat/azure-native-migration)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-QuickBooks%20%7C%20HubSpot-purple)](https://modelcontextprotocol.io)
 
@@ -648,7 +648,7 @@ PYTHONPATH=. uv run pytest tests/mcp_servers/test_hubspot_mcp.py -v
 
 ---
 
-**Built with ❤️ on Azure Free Tier**  
-**Last Updated:** March 6, 2026  
-**Version:** 4.0 (Azure-Native with MCP Integration)  
+**Built with ❤️ on Azure Free Tier**
+**Last Updated:** March 6, 2026
+**Version:** 4.1 (Azure-Native with MCP Integration)
 **Tests:** 83 passing (51 core + 22 HubSpot + 10 QuickBooks)

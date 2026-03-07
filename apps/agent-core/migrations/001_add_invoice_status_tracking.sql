@@ -44,14 +44,11 @@ COMMENT ON COLUMN invoices.status IS 'Current invoice status: PENDING, APPROVED,
 COMMENT ON COLUMN invoices.metadata IS 'Flexible JSON metadata for pipeline state';
 COMMENT ON INDEX idx_invoices_trace_id IS 'Fast lookup by trace_id for status updates';
 
--- Verify changes
-\d invoices
+-- Add content_hash column for duplicate detection
+ALTER TABLE invoices
+ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64);
 
--- Show row count
-SELECT COUNT(*) as invoice_count FROM invoices;
+CREATE INDEX IF NOT EXISTS idx_invoices_content_hash
+ON invoices(content_hash);
 
--- Show sample of existing data
-SELECT id, trace_id, status, created_at, updated_at 
-FROM invoices 
-ORDER BY created_at DESC 
-LIMIT 5;
+COMMENT ON COLUMN invoices.content_hash IS 'SHA256 hash of invoice content for duplicate detection';

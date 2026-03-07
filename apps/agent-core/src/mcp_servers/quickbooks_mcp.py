@@ -12,7 +12,7 @@ for QuickBooks Online API integration. It provides 6 tools for invoice processin
 
 Features:
 - OAuth 2.0 token refresh with automatic rotation
-- Token persistence to .secrets/qb_tokens.json
+- Token persistence to Redis (stateless, containerized environments)
 - Exponential backoff for rate limiting (429)
 - Automatic token refresh on 401 errors
 - Structured logging with trace_id correlation
@@ -21,7 +21,7 @@ Features:
 Usage:
     # Run as MCP server
     python -m src.mcp_servers.quickbooks_mcp
-    
+
     # Run smoke test
     python -m src.mcp_servers.quickbooks_mcp --smoke-test
 
@@ -32,6 +32,7 @@ Environment Variables:
     QB_REFRESH_TOKEN - OAuth refresh token (or use QB_REFRESH_TOKEN_FILE)
     QB_REFRESH_TOKEN_FILE - Path to file containing refresh token
     QB_SANDBOX - Use sandbox environment (default: true)
+    REDIS_URL - Redis URL for token store (Azure Cache for Redis)
 """
 
 import argparse
@@ -58,6 +59,8 @@ from tenacity import (
     wait_exponential,
 )
 
+from src.db.token_store import get_token_store
+
 logger = structlog.get_logger()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -67,9 +70,6 @@ logger = structlog.get_logger()
 QB_OAUTH_TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
 QB_SANDBOX_BASE_URL = "https://sandbox-quickbooks.api.intuit.com/v3"
 QB_PRODUCTION_BASE_URL = "https://quickbooks.api.intuit.com/v3"
-
-TOKEN_FILE_PATH = Path(__file__).parent.parent / ".secrets" / "qb_tokens.json"
-TOKEN_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 ACCESS_TOKEN_TTL_SECONDS = 3600  # 1 hour
 REFRESH_TOKEN_TTL_SECONDS = 8726400  # 100 days
@@ -219,9 +219,10 @@ class TokenManager:
     Handles:
     - Token refresh using refresh_token grant
     - Automatic token rotation (new refresh_token returned on each refresh)
-    - Token persistence to .secrets/qb_tokens.json
+    - Token persistence to Redis (stateless, containerized environments)
     - Auto-refresh when access_token expires
     - Support for both env var and file-based refresh tokens
+    - Graceful degradation when Redis unavailable
 
     Token Lifecycle:
     - access_token: Valid for 1 hour (3600 seconds)
@@ -259,8 +260,8 @@ class TokenManager:
         self._expires_at: Optional[float] = None
         self._trace_id: str = str(uuid.uuid4())
 
-        # Load existing tokens from file if available
-        self._load_tokens_from_file()
+        # Initialize Redis token store
+        self.token_store = get_token_store()
 
         # Override with provided refresh token if available
         if refresh_token:
@@ -268,9 +269,13 @@ class TokenManager:
         elif refresh_token_file:
             self._refresh_token = self._read_refresh_token_from_file(refresh_token_file)
 
+    async def connect(self) -> None:
+        """Connect to Redis token store."""
+        await self.token_store.connect()
+
     def _read_refresh_token_from_file(self, file_path: str) -> Optional[str]:
         """
-        Read refresh token from a file.
+        Read refresh token from a file (fallback method).
 
         Args:
             file_path: Path to file containing refresh token
@@ -297,86 +302,69 @@ class TokenManager:
             )
         return None
 
-    def _load_tokens_from_file(self) -> None:
+    async def _load_tokens_from_redis(self) -> None:
         """
-        Load cached tokens from .secrets/qb_tokens.json.
+        Load cached tokens from Redis.
 
         Only loads if access_token is not expired.
         """
-        if not TOKEN_FILE_PATH.exists():
+        tokens = await self.token_store.get_tokens(self.realm_id)
+        
+        if not tokens:
             logger.debug(
-                "token_file_not_found",
+                "tokens_not_found_in_redis",
                 trace_id=self._trace_id,
-                path=str(TOKEN_FILE_PATH),
+                realm_id=self.realm_id,
             )
             return
 
-        try:
-            data = json.loads(TOKEN_FILE_PATH.read_text())
-            expires_at = data.get("expires_at", 0)
+        expires_at = tokens.get("expires_at", 0)
 
-            # Check if tokens are still valid (with 5-minute buffer)
-            if time.time() < expires_at - 300:
-                self._access_token = data.get("access_token")
-                self._refresh_token = data.get("refresh_token")
-                self._expires_at = expires_at
-                self.realm_id = data.get("realm_id", self.realm_id)
+        # Check if tokens are still valid (with 5-minute buffer)
+        if time.time() < expires_at - 300:
+            self._access_token = tokens.get("access_token")
+            self._refresh_token = tokens.get("refresh_token")
+            self._expires_at = expires_at
 
-                logger.info(
-                    "tokens_loaded_from_file",
-                    trace_id=self._trace_id,
-                    expires_in_seconds=int(expires_at - time.time()),
-                )
-            else:
-                logger.info(
-                    "tokens_expired_in_file",
-                    trace_id=self._trace_id,
-                    expired_ago_seconds=int(time.time() - expires_at),
-                )
-        except Exception as e:
-            logger.warning(
-                "token_file_load_failed",
+            logger.info(
+                "tokens_loaded_from_redis",
                 trace_id=self._trace_id,
-                error=str(e),
+                realm_id=self.realm_id,
+                expires_in_seconds=int(expires_at - time.time()),
+            )
+        else:
+            logger.info(
+                "tokens_expired_in_redis",
+                trace_id=self._trace_id,
+                realm_id=self.realm_id,
+                expired_ago_seconds=int(time.time() - expires_at),
             )
 
-    def _save_tokens_to_file(self) -> None:
+    async def _save_tokens_to_redis(self) -> None:
         """
-        Save tokens to .secrets/qb_tokens.json.
+        Save tokens to Redis.
 
         Persists both access_token and refresh_token for future use.
         """
-        if not self._access_token or not self._refresh_token:
+        if not self._access_token or not self._refresh_token or not self._expires_at:
             logger.warning(
                 "token_save_skipped_missing_tokens",
                 trace_id=self._trace_id,
             )
             return
 
-        try:
-            TOKEN_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            data = {
-                "access_token": self._access_token,
-                "refresh_token": self._refresh_token,
-                "expires_at": self._expires_at,
-                "realm_id": self.realm_id,
-            }
-            TOKEN_FILE_PATH.write_text(json.dumps(data, indent=2))
+        success = await self.token_store.set_tokens(
+            realm_id=self.realm_id,
+            access_token=self._access_token,
+            refresh_token=self._refresh_token,
+            expires_at=int(self._expires_at),
+        )
 
-            # Set restrictive permissions (owner read/write only)
-            os.chmod(TOKEN_FILE_PATH, 0o600)
-
-            logger.info(
-                "tokens_saved_to_file",
+        if not success:
+            logger.warning(
+                "token_save_to_redis_failed",
                 trace_id=self._trace_id,
-                path=str(TOKEN_FILE_PATH),
-                expires_in_seconds=int(self._expires_at - time.time()) if self._expires_at else None,
-            )
-        except Exception as e:
-            logger.error(
-                "token_save_failed",
-                trace_id=self._trace_id,
-                error=str(e),
+                realm_id=self.realm_id,
             )
 
     async def get_access_token(self, trace_id: Optional[str] = None) -> str:
@@ -470,8 +458,8 @@ class TokenManager:
         self._refresh_token = data.get("refresh_token")
         self._expires_at = time.time() + data.get("expires_in", ACCESS_TOKEN_TTL_SECONDS)
 
-        # Persist to file
-        self._save_tokens_to_file()
+        # Persist to Redis
+        await self._save_tokens_to_redis()
 
         logger.info(
             "token_refresh_successful",
@@ -505,8 +493,8 @@ class QuickBooksMCPServer:
     - Typed I/O with Pydantic
     """
 
-    def __init__(self):
-        """Initialize QuickBooks MCP Server."""
+    async def initialize(self) -> None:
+        """Initialize QuickBooks MCP Server (async)."""
         self.server = FastMCP("quickbooks")
         self._trace_id: str = str(uuid.uuid4())
 
@@ -531,6 +519,10 @@ class QuickBooksMCPServer:
             sandbox=self.sandbox,
         )
 
+        # Connect to Redis token store and load cached tokens
+        await self.token_manager.connect()
+        await self.token_manager._load_tokens_from_redis()
+
         # Base URL
         self.base_url = QB_SANDBOX_BASE_URL if self.sandbox else QB_PRODUCTION_BASE_URL
 
@@ -542,6 +534,7 @@ class QuickBooksMCPServer:
             trace_id=self._trace_id,
             sandbox=self.sandbox,
             base_url=self.base_url,
+            redis_connected=self.token_manager.token_store._client is not None,
         )
 
     def _validate_config(self) -> None:
@@ -1157,6 +1150,8 @@ class QuickBooksMCPServer:
 
     async def run(self) -> None:
         """Run the MCP server using stdio transport."""
+        await self.initialize()
+        
         logger.info(
             "quickbooks_mcp_server_starting",
             trace_id=self._trace_id,
@@ -1276,15 +1271,16 @@ Environment Variables:
         cache_logger_on_first_use=True,
     )
 
-    if args.smoke_test:
-        # Run smoke test
+    async def run_smoke_test():
+        """Run smoke test asynchronously."""
         try:
             server = QuickBooksMCPServer()
+            await server.initialize()
         except ValueError as e:
             # Graceful error for missing credentials
             print(f"QB: ✗ {str(e)}")
             exit(1)
-        result = asyncio.run(server.smoke_test())
+        result = await server.smoke_test()
 
         if result:
             print("QB: ✓")
@@ -1292,16 +1288,25 @@ Environment Variables:
         else:
             print("QB: ✗ Smoke test failed")
             exit(1)
-    else:
-        # Run MCP server
+
+    async def run_server():
+        """Run MCP server asynchronously."""
         try:
             server = QuickBooksMCPServer()
+            await server.initialize()
         except ValueError as e:
             # Graceful error for missing credentials
             logger.error("quickbooks_mcp_startup_failed", error=str(e))
             print(f"Error: {str(e)}", file=sys.stderr)
             exit(1)
-        asyncio.run(server.run())
+        await server.run()
+
+    if args.smoke_test:
+        # Run smoke test
+        asyncio.run(run_smoke_test())
+    else:
+        # Run MCP server
+        asyncio.run(run_server())
 
 
 if __name__ == "__main__":

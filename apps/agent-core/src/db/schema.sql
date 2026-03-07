@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     invoice_date DATE NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'new',
     idempotency_key VARCHAR(64) NOT NULL UNIQUE,
+    content_hash VARCHAR(64),  -- SHA256 hash for duplicate detection
     extracted_data_json TEXT,
     quickbooks_bill_id VARCHAR(255),
     error_message TEXT,
@@ -46,6 +47,7 @@ CREATE INDEX idx_invoices_idempotency_key ON invoices(idempotency_key);
 CREATE INDEX idx_invoices_vendor_id ON invoices(vendor_id);
 CREATE INDEX idx_invoices_status ON invoices(status);
 CREATE INDEX idx_invoices_trace_id ON invoices(trace_id);
+CREATE INDEX idx_invoices_content_hash ON invoices(content_hash);
 
 -- Idempotency constraint: prevent duplicate processing
 -- If idempotency_key exists with terminal status, skip processing

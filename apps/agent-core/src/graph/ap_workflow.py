@@ -374,16 +374,77 @@ async def fraud_gate_node(state: WorkflowState) -> dict:
 
 async def duplicate_check_node(state: WorkflowState) -> dict:
     """
-    DUPLICATE_CHECK: Deterministic + fuzzy duplicate detection.
-    """
-    from src.matching.duplicate import duplicate_check_node as run_duplicate_check
+    DUPLICATE_CHECK: Content-based duplicate detection using invoice hash.
     
+    Checks for duplicate invoices based on:
+    - vendor_name + invoice_number + invoice_date + total_amount
+    
+    This prevents duplicate payments even if trace_id differs.
+    """
+    from src.db import db
+    from src.utils.hashing import compute_invoice_hash
+    from src.matching.duplicate import duplicate_check_node as run_fuzzy_duplicate_check
+
     trace_id = state.trace_id
     logger.info("node_duplicate_check_start", trace_id=trace_id)
-    
-    # Convert to dict for the node
+
+    extracted = state.extracted_invoice
+    if not extracted:
+        logger.error("duplicate_check_no_extraction", trace_id=trace_id)
+        return {
+            "duplicate_result": {
+                "node_name": "duplicate_check",
+                "confidence": 0.0,
+                "reasons": ["No extracted invoice data"],
+                "status": "error",
+            }
+        }
+
+    # Compute content-based hash
+    content_hash = compute_invoice_hash(
+        vendor_name=extracted.get("vendor_name"),
+        invoice_number=extracted.get("invoice_number"),
+        invoice_date=extracted.get("invoice_date"),
+        total_amount=extracted.get("total_amount"),
+    )
+
+    # Check database for exact content hash match
+    exists, existing_id = await db.check_invoice_duplicate(content_hash)
+
+    if exists and existing_id:
+        # Content hash match = exact duplicate
+        logger.warning(
+            "node_duplicate_content_hash_match",
+            trace_id=trace_id,
+            existing_id=str(existing_id),
+            content_hash=content_hash,
+        )
+
+        return {
+            "duplicate_result": {
+                "node_name": "duplicate_check",
+                "confidence": 1.0,
+                "reasons": ["Exact content duplicate found"],
+                "status": "success",
+                "is_duplicate": True,
+                "duplicate_invoice_ids": [str(existing_id)],
+                "match_type": "exact",
+                "similarity_score": 1.0,
+                "requires_duplicate_review": True,
+                "content_hash": content_hash,
+            },
+            "invoice_status": "duplicate_checked",
+        }
+
+    # No exact hash match - run fuzzy duplicate check as fallback
+    logger.info("node_duplicate_check_fuzzy_fallback", trace_id=trace_id)
     state_dict = state.model_dump()
-    return await run_duplicate_check(state_dict)
+    fuzzy_result = await run_fuzzy_duplicate_check(state_dict)
+
+    # Store hash for future checks (only if not duplicate)
+    await db.store_invoice_hash(trace_id, content_hash)
+
+    return fuzzy_result
 
 
 async def three_way_match_node(state: WorkflowState) -> dict:
