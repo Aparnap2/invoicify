@@ -79,3 +79,49 @@ dev = [
 #   pdf2image           → not needed (Azure DI accepts raw PDF)
 #   pyodbc              → asyncpg (Postgres, not SQL Server)
 #   redis               → azure-storage-queue + in-process cache
+
+[tool.pytest.ini_options]
+# Pytest configuration for Invoicify agent-core
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+]
+markers = [
+    "asyncio: async tests",
+    "unit: unit tests (no external dependencies)",
+    "integration: integration tests (require real DB)",
+    "e2e: end-to-end tests (require all services)",
+    "slow: slow running tests (>10 seconds)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/migrations/*",
+    "*/.venv/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]

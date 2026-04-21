@@ -70,6 +70,7 @@ class AuditLedger:
         new_state: Dict[str, Any],
         reasoning: str,
         metadata: Optional[Dict[str, Any]] = None,
+        source_citations: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Append audit event to ledger.
@@ -98,6 +99,7 @@ class AuditLedger:
             "new_state": new_state,
             "reasoning": reasoning,
             "metadata": metadata or {},
+            "source_citations": source_citations or {},
             "created_at": datetime.now(timezone.utc).isoformat(),
             "version": 1,  # For optimistic concurrency
         }
@@ -179,6 +181,7 @@ class AuditReceiptGenerator:
         invoice_id: str,
         tenant_id: str,
         decision: str,
+        source_citations: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Generate audit receipt.
@@ -190,11 +193,11 @@ class AuditReceiptGenerator:
             invoice_id: Invoice identifier
             tenant_id: Tenant identifier
             decision: Decision (APPROVED/REJECTED/BLOCKED)
+            source_citations: Source citations for compliance
         
         Returns:
             Audit receipt dict
         """
-        # Generate SHA-256 hash of PDF
         pdf_hash = hashlib.sha256(file_bytes).hexdigest()
         
         receipt = {
@@ -206,6 +209,7 @@ class AuditReceiptGenerator:
             "hash_algorithm": "SHA-256",
             "decision": decision,
             "ai_reasoning": ai_reasoning,
+            "source_citations": source_citations or {},
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "audit_type": "SYNC_COMPLETED",
         }
@@ -325,6 +329,7 @@ async def append_audit_event(
     reasoning: str,
     previous_state: Optional[Dict[str, Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    source_citations: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Append audit event to ledger.
@@ -336,6 +341,7 @@ async def append_audit_event(
             actor="agent",
             new_state={"status": "APPROVED"},
             reasoning="CORE vendor, risk < 0.3",
+            source_citations={"source_document": "invoice.pdf", "source_page": 2},
         )
     """
     ledger = get_ledger()
@@ -347,6 +353,7 @@ async def append_audit_event(
         new_state=new_state,
         reasoning=reasoning,
         metadata=metadata,
+        source_citations=source_citations,
     )
 
 

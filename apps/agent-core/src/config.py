@@ -90,6 +90,7 @@ Extraction backend selection:
 
     # ── Azure AI Search ───────────────────────────────────────────────────────
     # Replaces Qdrant vector store. Free: 50 MB, 3 indexes.
+    # Supports hybrid search (semantic + BM25) for compliance queries.
     azure_search_endpoint: Optional[str] = Field(
         default=None,
         description="Azure AI Search endpoint URL.",
@@ -101,6 +102,10 @@ Extraction backend selection:
     azure_search_index: str = Field(
         default="invoices",
         description="Azure AI Search index name.",
+    )
+    enable_hybrid_search: bool = Field(
+        default=True,
+        description="Enable hybrid search (semantic + BM25). For compliance queries requiring keyword-exact matching.",
     )
 
     # ── PostgreSQL (Azure Flexible Server) ───────────────────────────────────

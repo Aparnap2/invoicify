@@ -16,6 +16,7 @@ import { evalRoutes } from "./routes/eval";
 import { billingRoutes } from "./routes/billing";
 import { apiKeysRoutes } from "./routes/api-keys";
 import { auditLogsRoutes } from "./routes/audit-logs";
+import { telegram } from "./routes/telegram";
 import { InvoiceProcessor } from "./durable-objects/InvoiceProcessor";
 import type { Env } from "./types";
 
@@ -72,6 +73,9 @@ app.route("/api/v1/eval", evalRoutes);
 app.route("/api/v1/billing", billingRoutes);
 app.route("/api/v1/api-keys", apiKeysRoutes);
 app.route("/api/v1/audit-logs", auditLogsRoutes);
+
+// Telegram webhook (invoice intake from vendors)
+app.route("/webhook", telegram);
 
 // Middleware to block seed/eval routes in production
 app.use("/api/v1/seed/*", async (c, next) => {
