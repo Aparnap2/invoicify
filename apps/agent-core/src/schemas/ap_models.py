@@ -77,6 +77,7 @@ class NodeName(str, Enum):
     DUPLICATE_CHECK = "duplicate_check"
     THREE_WAY_MATCH = "three_way_match"
     GL_CODING = "gl_coding"
+    CITATION = "citation"
     DECISION = "decision"
     DRAFT_RESOLUTION = "draft_resolution"
     EXECUTE = "execute"
@@ -208,6 +209,17 @@ class ExecuteResult(StepResult):
     success: bool = False
     quickbooks_bill_id: Optional[str] = None
     error_message: Optional[str] = None
+
+
+class CitationResult(StepResult):
+    """Result from the CITATION node - source citation for audit trail."""
+
+    conclusion: str = ""
+    source_document: str = ""
+    source_page: Optional[int] = None
+    source_paragraph: str = ""
+    confidence_score: float = 0.0
+    citing_agent: str = ""
 
 
 class AuditLogEntry(BaseModel):

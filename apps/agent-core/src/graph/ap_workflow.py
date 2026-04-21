@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from src.schemas.ap_models import (
     APWorkflowState,
+    CitationResult,
     DecisionResult,
     DecisionType,
     DuplicateCheckResult,
@@ -87,6 +88,7 @@ class WorkflowState(BaseModel):
     duplicate_result: Optional[dict[str, Any]] = None
     three_way_result: Optional[dict[str, Any]] = None
     coding_result: Optional[dict[str, Any]] = None
+    citation_result: Optional[dict[str, Any]] = None
     decision_result: Optional[dict[str, Any]] = None
     draft_result: Optional[dict[str, Any]] = None
     execute_result: Optional[dict[str, Any]] = None
@@ -369,6 +371,85 @@ async def fraud_gate_node(state: WorkflowState) -> dict:
     return {
         "fraud_result": result.model_dump(),
         "invoice_status": "fraud_checked",
+    }
+
+
+async def citation_node(state: WorkflowState) -> dict:
+    """
+    CITATION: Generate source citations for audit trail.
+    
+    Records which document, page, and paragraph supported the decision.
+    This is critical for compliance - every conclusion must show its evidence.
+    """
+    from src.schemas.ap_models import CitationResult
+    
+    trace_id = state.trace_id
+    logger.info("node_citation_start", trace_id=trace_id)
+    
+    extracted = state.extracted_invoice
+    fraud = state.fraud_result or {}
+    decision = state.final_decision
+    
+    if not extracted:
+        logger.warning("node_citation_no_extraction", trace_id=trace_id)
+        return {
+            "citation_result": CitationResult(
+                node_name=NodeName.CITATION,
+                confidence=0.0,
+                reasons=["No extracted invoice data"],
+                status="error",
+                conclusion="",
+                source_document="",
+                source_paragraph="",
+                confidence_score=0.0,
+                citing_agent="citation_node",
+            ).model_dump(),
+        }
+    
+    source_doc = extracted.get("source_file_name", "unknown.pdf")
+    source_page = extracted.get("source_page", 1)
+    
+    conclusion = f"Invoice {decision}"
+    source_paragraph = ""
+    citing_agent = "fraud_gate_node"
+    confidence = 0.0
+    
+    if fraud.get("is_safe"):
+        conclusion = "Invoice approved - fraud checks passed"
+        total_amount = extracted.get("total_amount", 0)
+        vendor_name = extracted.get("vendor_name", "Unknown")
+        source_paragraph = f"Vendor: {vendor_name}, Total Amount: ₹{total_amount}"
+        confidence = fraud.get("confidence", 0.95)
+    else:
+        conclusion = "Invoice rejected - fraud detected"
+        reasons = fraud.get("reasons", ["Unknown fraud signal"])
+        source_paragraph = f"Fraud signals: {', '.join(reasons)}"
+        confidence = fraud.get("confidence", 0.85)
+        citing_agent = "fraud_gate_node"
+    
+    result = CitationResult(
+        node_name=NodeName.CITATION,
+        confidence=confidence,
+        reasons=["Citation generated from extracted data"],
+        status="success",
+        conclusion=conclusion,
+        source_document=source_doc,
+        source_page=source_page,
+        source_paragraph=source_paragraph,
+        confidence_score=confidence,
+        citing_agent=citing_agent,
+    )
+    
+    logger.info(
+        "node_citation_completed",
+        trace_id=trace_id,
+        conclusion=conclusion,
+        source_doc=source_doc,
+    )
+    
+    return {
+        "citation_result": result.model_dump(),
+        "invoice_status": "cited",
     }
 
 
@@ -720,6 +801,7 @@ def create_ap_workflow() -> StateGraph:
     workflow.add_node("duplicate_check", duplicate_check_node)
     workflow.add_node("three_way_match", three_way_match_node)
     workflow.add_node("gl_coding", gl_coding_node)
+    workflow.add_node("citation", citation_node)
     workflow.add_node("decision", decision_node)
     workflow.add_node("draft_resolution", draft_resolution_node)
     workflow.add_node("execute", execute_node)
@@ -734,7 +816,8 @@ def create_ap_workflow() -> StateGraph:
     workflow.add_edge("fraud_gate", "duplicate_check")
     workflow.add_edge("duplicate_check", "three_way_match")
     workflow.add_edge("three_way_match", "gl_coding")
-    workflow.add_edge("gl_coding", "decision")
+    workflow.add_edge("gl_coding", "citation")
+    workflow.add_edge("citation", "decision")
     
     # Conditional: decision → execute OR skip to end
     workflow.add_conditional_edges(

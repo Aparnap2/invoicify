@@ -122,6 +122,7 @@ async def get_container_client() -> ContainerClient:
 async def upload_pdf_bytes(
     file_bytes: bytes,
     blob_name: str,
+    tenant_id: str,
     metadata: Optional[Dict[str, Any]] = None,
     content_type: str = "application/pdf",
 ) -> str:
@@ -149,11 +150,18 @@ async def upload_pdf_bytes(
         logger.error("upload_pdf_bytes_missing_blob_name")
         raise ValueError("blob_name cannot be empty")
     
-    if not blob_name.endswith(".pdf"):
-        logger.warning("upload_pdf_bytes_non_pdf_extension", blob_name=blob_name)
+    if not tenant_id:
+        logger.error("upload_pdf_bytes_missing_tenant_id")
+        raise ValueError("tenant_id cannot be empty")
+    
+    # Prepend tenant_id to blob path for tenant isolation
+    tenant_isolated_path = f"{tenant_id}/documents/{blob_name}"
+    
+    if not tenant_isolated_path.endswith(".pdf"):
+        logger.warning("upload_pdf_bytes_non_pdf_extension", blob_name=tenant_isolated_path)
     
     container_client = await get_container_client()
-    blob_client = container_client.get_blob_client(blob_name)
+    blob_client = container_client.get_blob_client(tenant_isolated_path)
     
     # Prepare metadata (convert all values to strings)
     blob_metadata = {}
@@ -199,6 +207,7 @@ async def upload_pdf_bytes(
 
 async def get_blob_url(
     blob_name: str,
+    tenant_id: str,
     expiry_minutes: int = 60,
 ) -> str:
     """
@@ -206,6 +215,7 @@ async def get_blob_url(
     
     Args:
         blob_name: Blob path/name
+        tenant_id: Tenant identifier for path isolation
         expiry_minutes: URL validity duration (default: 60 minutes)
     
     Returns:
@@ -218,8 +228,14 @@ async def get_blob_url(
         logger.error("get_blob_url_missing_blob_name")
         raise ValueError("blob_name cannot be empty")
     
+    if not tenant_id:
+        logger.error("get_blob_url_missing_tenant_id")
+        raise ValueError("tenant_id cannot be empty")
+    
+    tenant_isolated_path = f"{tenant_id}/documents/{blob_name}"
+    
     container_client = await get_container_client()
-    blob_client = container_client.get_blob_client(blob_name)
+    blob_client = container_client.get_blob_client(tenant_isolated_path)
     
     # Generate SAS token
     from azure.storage.blob import generate_blob_sas, BlobSasPermissions
@@ -247,12 +263,13 @@ async def get_blob_url(
     return presigned_url
 
 
-async def download_blob_bytes(blob_name: str) -> bytes:
+async def download_blob_bytes(blob_name: str, tenant_id: str) -> bytes:
     """
     Download blob content as bytes.
     
     Args:
         blob_name: Blob path/name
+        tenant_id: Tenant identifier for path isolation
     
     Returns:
         Raw blob bytes
@@ -265,8 +282,14 @@ async def download_blob_bytes(blob_name: str) -> bytes:
         logger.error("download_blob_bytes_missing_blob_name")
         raise ValueError("blob_name cannot be empty")
     
+    if not tenant_id:
+        logger.error("download_blob_bytes_missing_tenant_id")
+        raise ValueError("tenant_id cannot be empty")
+    
+    tenant_isolated_path = f"{tenant_id}/documents/{blob_name}"
+    
     container_client = await get_container_client()
-    blob_client = container_client.get_blob_client(blob_name)
+    blob_client = container_client.get_blob_client(tenant_isolated_path)
     
     try:
         download_stream = await blob_client.download_blob()
@@ -290,12 +313,13 @@ async def download_blob_bytes(blob_name: str) -> bytes:
         raise
 
 
-async def delete_blob(blob_name: str) -> bool:
+async def delete_blob(blob_name: str, tenant_id: str) -> bool:
     """
     Delete blob from storage.
     
     Args:
         blob_name: Blob path/name
+        tenant_id: Tenant identifier for path isolation
     
     Returns:
         True if deleted, False if blob didn't exist
@@ -307,8 +331,14 @@ async def delete_blob(blob_name: str) -> bool:
         logger.error("delete_blob_missing_blob_name")
         raise ValueError("blob_name cannot be empty")
     
+    if not tenant_id:
+        logger.error("delete_blob_missing_tenant_id")
+        raise ValueError("tenant_id cannot be empty")
+    
+    tenant_isolated_path = f"{tenant_id}/documents/{blob_name}"
+    
     container_client = await get_container_client()
-    blob_client = container_client.get_blob_client(blob_name)
+    blob_client = container_client.get_blob_client(tenant_isolated_path)
     
     try:
         await blob_client.delete_blob()
@@ -337,21 +367,24 @@ async def delete_blob(blob_name: str) -> bool:
         raise
 
 
-async def blob_exists(blob_name: str) -> bool:
+async def blob_exists(blob_name: str, tenant_id: str) -> bool:
     """
     Check if blob exists in container.
     
     Args:
         blob_name: Blob path/name
+        tenant_id: Tenant identifier for path isolation
     
     Returns:
         True if exists, False otherwise
     """
-    if not blob_name:
+    if not blob_name or not tenant_id:
         return False
     
+    tenant_isolated_path = f"{tenant_id}/documents/{blob_name}"
+    
     container_client = await get_container_client()
-    blob_client = container_client.get_blob_client(blob_name)
+    blob_client = container_client.get_blob_client(tenant_isolated_path)
     
     try:
         return await blob_client.exists()
@@ -374,6 +407,8 @@ if __name__ == "__main__":
             print("❌ AZURE_STORAGE_CONNECTION_STRING not set")
             return
         
+        tenant_id = "test-tenant-001"
+        
         try:
             # Test with sample PDF bytes (minimal valid PDF header)
             sample_pdf = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF"
@@ -384,26 +419,27 @@ if __name__ == "__main__":
             blob_url = await upload_pdf_bytes(
                 file_bytes=sample_pdf,
                 blob_name=blob_name,
+                tenant_id=tenant_id,
                 metadata={"test": "true", "purpose": "cli_test"},
             )
             
             print(f"✅ Upload successful: {blob_url}")
             
             # Test existence check
-            exists = await blob_exists(blob_name)
+            exists = await blob_exists(blob_name, tenant_id)
             print(f"✅ Blob exists: {exists}")
             
             # Test download
-            downloaded = await download_blob_bytes(blob_name)
+            downloaded = await download_blob_bytes(blob_name, tenant_id)
             print(f"✅ Download successful: {len(downloaded)} bytes")
             
             # Test presigned URL
-            presigned = await get_blob_url(blob_name, expiry_minutes=5)
+            presigned = await get_blob_url(blob_name, tenant_id, expiry_minutes=5)
             print(f"✅ Presigned URL generated (expires in 5 min)")
             print(f"   {presigned[:100]}...")
             
             # Cleanup: delete test blob
-            deleted = await delete_blob(blob_name)
+            deleted = await delete_blob(blob_name, tenant_id)
             print(f"✅ Test blob deleted: {deleted}")
             
             print("\n✅ All tests passed!")
